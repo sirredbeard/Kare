@@ -100,16 +100,16 @@ These are the working findings after reviewing the public Qualcomm, Arduino, ONN
 
 | Gate | Status | Decision |
 | --- | --- | --- |
-| Qualcomm runtime installation | Ready for device proof | Official Linux ARM64 GenieX and `onnxruntime-qnn` packages exist |
-| QCS8275 support | Confirmed for GenieX and AI Hub | QCS8275 is an explicit Qualcomm target |
-| Full HTP model execution | Open | Must profile the exact graph and reject unacceptable fallback |
-| .NET 11 ARM64 CPU package | Closed, proven locally | `Microsoft.ML.OnnxRuntimeGenAI` `0.17.1` runs on .NET 11 `linux-arm64`, JIT and Native AOT, verified on emulated Ubuntu 24.04.5 |
+| Qualcomm runtime installation | Closed on the board | QAIRT 2.46.0 installs straight from apt on the stock image |
+| QCS8275 support | Closed on the board | Hexagon V75, soc_id 675, validator unit test executed on the DSP |
+| Full HTP model execution | Open, now the blocker | Needs an ONNX Runtime build with the QNN execution provider for linux-arm64 |
+| .NET 11 ARM64 CPU package | Closed on the board | `Microsoft.ML.OnnxRuntimeGenAI` `0.17.1` generates tokens on the VENTUNO Q from a Native AOT binary |
 | .NET 11 ARM64 QNN package | Open, narrowed | Neither GenAI NuGet package ships `libonnxruntime_providers_qnn.so` |
 | GenieX service API | Available, Developer Preview | Use the C SDK or OpenAI-compatible server behind an adapter |
 | Copilot CLI transparent interception | Not supported by extensions | Use BYOK for provider redirection |
 | Copilot SDK cloud escalation | Feasible, not transparent | Kare owns route and session correlation |
 | Cache safety | Policy design required | Cache deterministic artifacts first |
-| Context, thermals, and power | Open | Measure on the board |
+| Context, thermals, and power | Thermals look like a non-issue | Sustained CPU generation peaked at 43.3 C. Context cost is the real limit at about 15 ms per prompt token on CPU |
 
 1. Qualcomm runtime libraries on Ubuntu 24.04.5: yes, packages now exist for the required operating system and architecture. GenieX `0.7.1` publishes Linux ARM64 CLI, SDK, benchmark, and Python assets, and bundles compatible QAIRT libraries by default. `onnxruntime-qnn` `2.6.0` publishes Linux ARM64 inference artifacts for QAIRT `2.50.40`. Installation is no longer the research question. The device proof must verify library loading, FastRPC access, model loading, and inference on the VENTUNO Q image.
 
@@ -562,12 +562,12 @@ Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run
 | Stage | State | What exists |
 | --- | --- | --- |
 | 0 protect the boundary | Done | Ignore rules, no device detail in the repository, plan reviewed |
-| 1 device inventory | Tool built, not run on the board | `kare-probe probe` reports CPU, memory, FastRPC and DSP nodes, QAIRT libraries, thermal zones |
-| 2 runtime proof | CPU half closed off-device | Packaged GenAI NuGet proven on emulated Ubuntu 24.04.5 aarch64. No QNN provider library ships. GenieX untested |
-| 3 model selection | Not started | Needs the board |
-| 4 service skeleton | Skeleton builds and is tested, never served a token | OpenAI-compatible endpoint, bounds, admission control, route disclosure, local only policy |
+| 1 device inventory | Closed | Ran on the board. 8 cores A78C plus A55, 15 GB, no swap, 34 GB free eMMC, `/dev/fastrpc-cdsp` present and openable, no QAIRT userspace, 48 thermal zones idle at 38.8 C |
+| 2 runtime proof | CPU closed on the board, NPU half open | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed and a unit test ran on the DSP. CPU inference measured on the board. Still need an ONNX Runtime build with the QNN execution provider. GenieX untested |
+| 3 model selection | First model running | Arm TinyLlama 1.1B int4 loads and generates. Phi-4-mini INT4 downloading. Final choice needs the board |
+| 4 service skeleton | Serving | `build/smoke-service.sh` passes end to end. Streaming and non-streaming completions, real token usage, bounds, admission control, route disclosure, local only policy. AOT published for ARM64 |
 | 5 cache and shared knowledge | Not started | |
-| 6 Copilot integration | Not started | The endpoint BYOK needs exists, nothing has pointed at it |
+| 6 Copilot integration | Endpoint ready | BYOK endpoint serves. Copilot CLI has not been pointed at it yet |
 | 7 Lerna and Foundry | Not started | |
 
 ### Stage 0: protect the boundary

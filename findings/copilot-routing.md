@@ -65,3 +65,33 @@ Binding is guarded in code. Kare refuses to start on a non-loopback address unle
 `MinResponseDataRate` is set to null on Kestrel. A local model on a cold cache can take a long time to produce the first token, and the default minimum response rate would abort exactly the requests this project exists to serve.
 
 Errors map to OpenAI shaped bodies: 413 prompt_too_large, 429 capacity_exhausted with Retry-After, 503 no_backend. If the response has already started, the connection is aborted instead of appending a success shaped body to a partial stream.
+
+## Measured 2026-10-02, the BYOK endpoint actually serves
+
+Started `src/Kare.Service` on loopback with the Arm TinyLlama model and ran `build/smoke-service.sh`. Everything passed.
+
+Non-streaming:
+
+```
+{"id":"chatcmpl-...","object":"chat.completion","created":1790912878,"model":"kare-local",
+ "choices":[{"index":0,"message":{"role":"assistant","content":"[Single word: ready] ..."},
+ "finish_reason":"length"}],
+ "usage":{"prompt_tokens":30,"completion_tokens":16,"total_tokens":46},
+ "kare_route":{"route":"LocalSlm","backend":"OnnxGenAiCpu",
+   "reason":"Local only policy. Cloud escalation is not configured.","billable":false}}
+```
+
+Streaming produced `chat.completion.chunk` frames, a final usage chunk with `finish_reason: "stop"`, then the `kare_route` trailer chunk, then `data: [DONE]`. The trailer is non-standard and a strict client will ignore the unknown key, which is the behavior I want. The route is always disclosed and never inferred.
+
+`GET /v1/models` returns the configured `ModelId`, not the model directory name. That matters because the BYOK client sends back whatever id it was given.
+
+An empty `messages` array returns 400. Good, because a client that sends no messages has a bug and silently generating from nothing would hide it.
+
+Note on configuration. `ModelPath` is resolved against the content root, not the working directory, so a relative path from the repo root fails when you run with `dotnet run --project`. Use an absolute path, or set it per deployment. The failure is loud:
+
+```
+Kare.Core.NoBackendAvailableException: No local inference backend is available.
+  OnnxGenAiCpu: Model directory does not exist: models/tinyllama-arm-int4
+```
+
+That is the correct behavior. The listener never opens.

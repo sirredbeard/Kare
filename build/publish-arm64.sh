@@ -71,6 +71,8 @@ echo "Publishing $PROJECT to $OUTPUT (aot=$AOT)"
     -r linux-arm64 \
     --self-contained true \
     -p:PublishAot="$AOT" \
+    -p:BaseOutputPath=/src/artifacts/arm64-build/bin/ \
+    -p:BaseIntermediateOutputPath=/src/artifacts/arm64-build/obj/ \
     -o "/src/$OUTPUT"
 
 echo
