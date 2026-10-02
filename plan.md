@@ -565,9 +565,9 @@ Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run
 | --- | --- | --- |
 | 0 protect the boundary | Done | Ignore rules, no device detail in the repository, plan reviewed |
 | 1 device inventory | Closed | Ran on the board. 8 cores A78C plus A55, 15 GB, no swap, 34 GB free eMMC, `/dev/fastrpc-cdsp` present and openable, no QAIRT userspace, 48 thermal zones idle at 38.8 C |
-| 2 runtime proof | CPU and QNN plumbing closed, useful NPU model open | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed. Official QNN plugin registers from .NET and executes a profiled HTP partition. Phi-4-mini now runs on the board. GenieX remains untested |
-| 3 model selection | TinyLlama CPU measured, TinyLlama QNN rejected, Phi-4-mini measured | Arm TinyLlama 1.1B int4 loads and generates, but only a trivial mask subgraph reaches HTP and performance regresses. Phi-4-mini INT4 loads through the .NET 11 ARM64 path. Warm one-shot measurements range from 10.5 seconds at 64 prompt tokens to 19.1 seconds at 256 tokens, with cold-start variance. Final choice needs a Qualcomm model benchmark |
-| 4 service skeleton | Serving | `build/smoke-service.sh` passes end to end. Streaming and non-streaming completions, real token usage, bounds, admission control, route disclosure, local only policy. AOT published for ARM64 |
+| 2 runtime proof | Closed for first QCS8275 NPU candidate | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed. Official QNN plugin registers from .NET and executes a profiled HTP partition. GenieX v0.7.1 loads the Qualcomm Qwen3 1.7B W4A16 QCS8275 bundle and serves it through QNN/HTP |
+| 3 model selection | Qwen3 NPU candidate measured, final choice open | Arm TinyLlama 1.1B int4 loads and generates, but only a trivial mask subgraph reaches HTP and performance regresses. Phi-4-mini INT4 is the CPU reference. Qwen3 1.7B W4A16 produced 26.3 tok/s on NPU versus 20.3 tok/s on board CPU for a 64-token coding response. Quality and longer-context measurements remain |
+| 4 service skeleton | Serving on the board | ARM64 service published and started on the VENTUNO Q with the project-local .NET 11 runtime. Health, model listing, a real Phi-4-mini completion, streaming, route disclosure, token usage, and empty-message rejection all passed. |
 | 5 cache and shared knowledge | Not started | |
 | 6 Copilot integration | Endpoint ready | BYOK endpoint serves. Copilot CLI has not been pointed at it yet |
 | 7 Lerna and Foundry | Not started | |
@@ -592,6 +592,7 @@ Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run
 - Record Phi-4-mini prompt and decode behavior before choosing the local default.
 - Install pinned GenieX Linux ARM64 assets.
 - Run Qwen3 1.7B W4A16 through the QCS8275 QAIRT bundle.
+- Verify the GenieX OpenAI-compatible server and record model-id and thinking-mode quirks before adding a Kare adapter.
 - Compare the published Q4_0 CPU, GPU, and NPU paths.
 - Build a QNN-enabled ONNX Runtime GenAI native path only if the comparison still justifies it.
 - Capture reproducible benchmark output.
@@ -609,6 +610,18 @@ Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run
 - Add health, authentication, request limits, streaming, cancellation, and structured metrics.
 - Add one local inference adapter.
 - Do not add cloud routing or a cache until the local path is observable.
+
+Measured on the VENTUNO Q on 2026-10-02:
+
+```
+health                 passed
+model listing          passed
+non-stream completion  passed, Phi-4-mini returned tokens and usage
+streaming              passed, SSE completed with data: [DONE]
+empty messages         rejected with HTTP 400
+route                  LocalSlm / OnnxGenAiCpu / billable false
+runtime                project-local .NET 11 RC on the board
+```
 
 ### Stage 5: cache and shared knowledge
 

@@ -271,3 +271,38 @@ partial QNN partition       TTFT 4.683 s, decode 17.31 tok/s
 The stock Arm TinyLlama CPU graph fails gate 3. The CPU fallback is unacceptable and QNN makes it slower. Stop trying to force this graph onto HTP.
 
 The next accelerator model must be prepared for QNN or delivered as a QCS8275 QAIRT or EPContext artifact. Qwen3 1.7B W4A16 through Qualcomm's QCS8275 bundle remains the right next NPU test. Phi-4-mini stays the CPU reference until there is a QNN-specific conversion worth testing.
+
+## Measured 2026-10-02, Qwen3 1.7B W4A16 on the VENTUNO Q
+
+The Qualcomm AI Hub `v0.63.0` QCS8275 asset is real and public:
+
+```
+runtime       geniex_qairt
+precision     w4a16
+chipset       qualcomm-qcs8275
+archive       1.54 GB
+sha256        f97da1ab223df9ceb2c2df4f246ef576bf9045c4cb6b10d8caed8bd4356932db
+```
+
+GenieX v0.7.1 was unpacked on the board. The CLI reports its bundled QAIRT runtime as 2.45. The archive contains four context-binary weight parts, tokenizer files, `genie_config.json`, and the QCS8275 HTP configuration. The system QAIRT 2.46 installation is not needed for this bundle.
+
+The first inference used `compute=npu`, `power-mode=high_performance`, `think=false`, and a 64-token output. The QNN logs show HTP V75 detection, QNN device creation, context-binary loading, and all four token graph partitions executing.
+
+```
+NPU          26.3 tok/s, 64 output tokens, 0.1 s first token
+CPU          20.3 tok/s, 64 output tokens, 0.1 s first token
+```
+
+The NPU result is about 30 percent faster than the GenieX CPU path for this short coding prompt. The larger gain is expected in prompt processing. The server later reported 483.87 prompt tokens/s and 27.90 predicted tokens/s for a 28-token prompt and 16-token output.
+
+GenieX also exposed the promised local server:
+
+```
+GET /v1/models                 passed
+POST /v1/chat/completions      passed
+stream=true                    passed, data:[DONE]
+```
+
+The served model id is `qualcomm/qwen3_1_7b:w4a16`, however requests must use `qualcomm/qwen3_1_7b` without the precision suffix in this build. The non-streaming response returned an empty model field and the default Qwen3 reasoning output even with a short prompt. Kare's adapter needs to normalize the model id, set the model's thinking policy, and restore the requested model name in its own response envelope.
+
+The CLI also logs that the llama.cpp OpenCL plugin cannot load because `libOpenCL.so.1` is absent. That does not block the QNN/QAIRT path. It blocks the separate OpenCL llama.cpp plugin until the board's GPU userspace is installed, so do not call the llama.cpp GPU path proven yet.

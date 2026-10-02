@@ -239,3 +239,20 @@ prompt       TTFT       decode
 ```
 
 The 256-token run above is faster than the earlier 32-token run because the first measurement includes more cold-start variance. Do not treat one-shot numbers as stable medians. The shape is still clear: Phi-4-mini spends most of its time in prompt processing, and increasing context hurts interactive latency quickly. The next benchmark pass needs warmup iterations and a fixed thread setting recorded in the report.
+
+## Measured 2026-10-02, service path on the VENTUNO Q
+
+Published `Kare.Service` for `linux-arm64`, copied it to the board, and started it with the project-local .NET 11 runtime. The system runtime is .NET 10, so calling `dotnet kare.dll` without the local runtime fails before the service starts. Calling `$HOME/kare/source/.dotnet/dotnet kare.dll` works.
+
+The board service passed:
+
+```
+GET /health                         200
+GET /v1/models                      200
+empty messages                     400
+non-streaming completion            real Phi-4-mini output and usage
+streaming completion                SSE data and data: [DONE]
+route                              LocalSlm / OnnxGenAiCpu / billable false
+```
+
+The model returned `ReadyReady` for the requested single-word prompt. That is a model or tokenizer behavior to account for in quality tests, not a transport failure. The route metadata and token counts came through the OpenAI-compatible endpoint.
