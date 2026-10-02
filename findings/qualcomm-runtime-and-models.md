@@ -236,4 +236,38 @@ QNN stub              libQnnHtpV75Stub.so
 
 Gate 1 is closed. Gate 2 is closed. The remaining unknown is the ONNX Runtime QNN execution provider `soc_model` value for QCS8275, which is a different identifier from `htp_arch` and still has to be determined.
 
-Gate 3 is now the blocker, and it is narrow: no `libonnxruntime_providers_qnn.so` ships in either ONNX Runtime NuGet package for linux-arm64, so we have to build ONNX Runtime with the QNN execution provider ourselves against this QAIRT install. The headers are already on the board from `qairt-headers`.
+Gate 3 is now the blocker, and it is narrow: no `libonnxruntime_providers_qnn.so` ships in either ONNX Runtime NuGet package for linux-arm64. The official separate QNN plugin package is the first path to test before building ONNX Runtime.
+
+## Measured 2026-10-02, QNN plugin works and stock TinyLlama fails gate 3
+
+The official QNN plugin saved us from building ONNX Runtime. It still has three versions that must match:
+
+```
+ONNX Runtime GenAI      0.17.1
+ONNX Runtime core       1.24.4 for this test
+QNN plugin              2.2.0
+QAIRT                   2.46.0
+```
+
+QNN plugin 2.6.0 registers with ONNX Runtime 1.30.0, however it requires QAIRT 2.50.40. On this board it fails device creation with `QNN_DEVICE_ERROR_INVALID_CONFIG`. QNN plugin 2.2.0 is the exact QAIRT 2.46.0 match, however it's older plugin ABI does not load under ONNX Runtime 1.30.0. Pairing it with the declared ONNX Runtime 1.24.4 core works. GenAI asks for ORT API 26, then 25, then runs on API 24.
+
+That stack loaded HTP over FastRPC, prepared a V75 graph, used four HVX threads, and returned tokens. Detailed profiling proves the only HTP partition was this:
+
+```
+/model/attn_mask_reformat/attn_mask_subgraph/Shape
+/model/attn_mask_reformat/attn_mask_subgraph/Gather
+/model/attn_mask_reformat/attn_mask_subgraph/Gather/Cast
+```
+
+The transformer, matmuls, attention, KV cache, and token generation stayed on CPU. The HTP graph moved 2 KB through DDR. This is technically HTP execution and practically useless.
+
+Measured at 64 prompt tokens and 8 output tokens:
+
+```
+CPU only, earlier run       TTFT 1.696 s, decode about 23 tok/s
+partial QNN partition       TTFT 4.683 s, decode 17.31 tok/s
+```
+
+The stock Arm TinyLlama CPU graph fails gate 3. The CPU fallback is unacceptable and QNN makes it slower. Stop trying to force this graph onto HTP.
+
+The next accelerator model must be prepared for QNN or delivered as a QCS8275 QAIRT or EPContext artifact. Qwen3 1.7B W4A16 through Qualcomm's QCS8275 bundle remains the right next NPU test. Phi-4-mini stays the CPU reference until there is a QNN-specific conversion worth testing.

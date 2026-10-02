@@ -34,11 +34,30 @@ public sealed class OnnxGenAiOptions
     public string? ExecutionProvider { get; set; }
 
     /// <summary>
+    /// Optional plugin execution provider library registered with ONNX Runtime GenAI
+    /// before the model is loaded. QNN EP 2.x uses this path on Linux ARM64.
+    /// </summary>
+    public string? ExecutionProviderLibraryPath { get; set; }
+
+    /// <summary>
+    /// Process-wide handle used to register <see cref="ExecutionProviderLibraryPath"/>.
+    /// This is not the provider name passed to <see cref="ExecutionProvider"/>.
+    /// </summary>
+    [Required(AllowEmptyStrings = false)]
+    public string ExecutionProviderRegistrationName { get; set; } = "QNNExecutionProvider";
+
+    /// <summary>
     /// Provider options passed through to ONNX Runtime, for example backend_path,
     /// soc_model, and htp_arch for QNN. Kare does not invent values for these.
     /// The correct QCS8275 values must be read from the installed QAIRT on the device.
     /// </summary>
     public Dictionary<string, string> ProviderOptions { get; } = [];
+
+    /// <summary>
+    /// Prevent ONNX Runtime from silently assigning unsupported nodes to CPU inside
+    /// an explicitly configured accelerator session. Kare uses a separate CPU backend.
+    /// </summary>
+    public bool DisableCpuFallback { get; set; } = true;
 
     /// <summary>
     /// Native libraries that must be present before the backend reports available.

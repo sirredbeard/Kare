@@ -184,3 +184,47 @@ So CPU-only local inference does not clear the bar for the Copilot CLI BYOK path
 Also worth testing Microsoft Phi-4-mini INT4 before concluding anything about the runtime. It is RTN block-32 with acc-level-4 and Microsoft tunes those `MatMulNBits` kernels. The Arm model is "kquantlast" with int8 embeddings, built and benchmarked for Graviton g4, which is Neoverse with SVE. The A78C has NEON only. A quantization chosen for SVE may simply have no good NEON path, and that alone could explain a 3x prefill.
 
 Do not generalize the 15 ms per token until Phi-4-mini has been measured on the same board.
+
+## Measured 2026-10-02, the Linux ARM64 plugin path works
+
+We do not need to rebuild ONNX Runtime just to register QNN. ONNX Runtime GenAI 0.17.1 exports `OgaRegisterExecutionProviderLibrary`, but the C# wrapper does not expose it and the native function can throw a C++ exception. Kare now has a small C++ boundary that catches the exception and an AOT-safe source-generated P/Invoke.
+
+Version matching matters:
+
+```
+QNN 2.6.0    ORT >= 1.24.1, built with 1.27.0, QAIRT 2.50.40
+QNN 2.2.0    ORT >= 1.24.1, built with 1.24.4, QAIRT 2.46.0
+board apt     QAIRT 2.46.0
+```
+
+QNN 2.6.0 plus the board's 2.46 runtime fails HTP device creation. QNN 2.2.0 plus ORT 1.30.0 fails the plugin ABI sanity check. QNN 2.2.0 plus ORT 1.24.4 loads, compiles a graph, executes it on V75, and returns tokens through the .NET 11 client.
+
+This is not a useful model result. Detailed QNN profiling shows only an attention-mask Shape/Gather/Cast partition on HTP. TTFT regressed from 1.696 seconds on CPU to 4.683 seconds with the partial QNN partition, and decode dropped from about 23 to 17.31 tokens per second.
+
+`disable_cpu_ep_fallback` in GenAI 0.17.1 does not reject this partial partition under the older ORT 1.24.4 compatibility stack. The newer documented `config_entries` JSON field is not accepted by the GenAI 0.17.1 parser. Kare must treat QNN profiling as required evidence, not trust a successful response or the configured provider name.
+
+Gate 3 result for Arm TinyLlama: failed. The graph runs, but almost all useful work falls back to CPU.
+
+## Measured 2026-10-02 on the VENTUNO Q, Phi-4-mini CPU reference
+
+The refreshed Release probe ran the downloaded Microsoft Phi-4-mini INT4 model on the board. The earlier failure was not a bad model. It was a stale ARM64 probe carrying an old `config_entries` experiment. The current model configuration contains only the supported GenAI 0.17.1 fields, and the refreshed binary loads it.
+
+One run, six-thread setting from the earlier CPU tuning, 256 prompt tokens, 32 output tokens:
+
+```
+TTFT       26408 ms
+decode     7.17 tok/s
+total      30729 ms
+thermal    39.4 C start, 41.4 C peak
+```
+
+This is a real Phi-4-mini result on the VENTUNO Q, not a desktop estimate. It is much slower than Arm TinyLlama on the same CPU path, which is expected for a 3.8B model versus a 1.1B model. The result is still useful: Phi-4-mini fits in memory and loads through the packaged .NET 11 ARM64 GenAI path, but it is not a good interactive default without prefix reuse, a shorter local prompt, or an accelerator backend.
+
+The older GenAI native stack prints API compatibility warnings:
+
+```
+requested API version 26, supported 1 and 24
+requested API version 25, supported 1 and 24
+```
+
+The model still loads and generates. This is a compatibility warning from the QNN-matched ORT 1.24.4 native stack, not a failed CPU inference. Keep it visible in device logs and do not call the stack fully current until the native versions are aligned.

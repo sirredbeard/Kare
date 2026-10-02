@@ -77,6 +77,16 @@ public sealed class OnnxGenAiBackend : ILocalInferenceBackend
             NativeLibrary.Free(handle);
         }
 
+        try
+        {
+            EnsureExecutionProviderRegistered();
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or InvalidOperationException)
+        {
+            return ValueTask.FromResult(
+                BackendProbeResult.Unavailable($"Execution provider plugin registration failed: {ex.Message}"));
+        }
+
         // Building the Config proves the native GenAI library loads and that the model
         // config parses. It does not load model weights.
         try
@@ -154,6 +164,12 @@ public sealed class OnnxGenAiBackend : ILocalInferenceBackend
                 {
                     config.SetProviderOption(_options.ExecutionProvider, option, value);
                 }
+
+                if (_options.DisableCpuFallback)
+                {
+                    config.Overlay(
+                        """{"model":{"decoder":{"session_options":{"disable_cpu_ep_fallback":"1"}}}}""");
+                }
             }
 
             return config;
@@ -173,7 +189,26 @@ public sealed class OnnxGenAiBackend : ILocalInferenceBackend
             _options.ModelPath,
             _options.ExecutionProvider ?? "genai_config.json default");
 
+        EnsureExecutionProviderRegistered();
         var config = BuildConfig();
         return new OnnxRuntimeGenAIChatClient(config, ownsConfig: true, new OnnxRuntimeGenAIChatClientOptions());
+    }
+
+    private void EnsureExecutionProviderRegistered()
+    {
+        if (string.IsNullOrWhiteSpace(_options.ExecutionProviderLibraryPath))
+        {
+            return;
+        }
+
+        if (!File.Exists(_options.ExecutionProviderLibraryPath))
+        {
+            throw new InvalidOperationException(
+                $"Execution provider library does not exist: {_options.ExecutionProviderLibraryPath}");
+        }
+
+        GenAiExecutionProviderRegistry.EnsureRegistered(
+            _options.ExecutionProviderRegistrationName,
+            _options.ExecutionProviderLibraryPath);
     }
 }

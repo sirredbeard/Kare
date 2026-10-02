@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>Kare.Inference.OnnxGenAI</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

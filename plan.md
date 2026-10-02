@@ -69,7 +69,7 @@ The official build documentation describes a source build with CMake and .NET fo
 
 Release `0.17.1` of `Microsoft.ML.OnnxRuntimeGenAI` contains `runtimes/linux-arm64/native/libonnxruntime-genai.so` and depends on `Microsoft.ML.OnnxRuntime` `1.30.0`. This gives Kare a packaged CPU path on .NET 11 through the package's .NET 8 and .NET Standard managed targets. It does not give Kare a packaged Linux ARM64 C# QNN path.
 
-The separate `onnxruntime-qnn` `2.6.0` release publishes Linux ARM64 inference wheels and a native `.tgz`, built for QAIRT `2.50.40`. Its packaging table does not list a Linux NuGet package. Kare should therefore use the normal GenAI NuGet package for the first CPU proof and expect a custom native integration or source build for ONNX Runtime GenAI with QNN from C#.
+The separate `onnxruntime-qnn` releases publish Linux ARM64 inference wheels and native `.tgz` files. Version matching is strict. Release `2.6.0` uses QAIRT `2.50.40`; release `2.2.0` uses the board's QAIRT `2.46.0`. Neither publishes a Linux NuGet package. Kare can register the plugin through a small native bridge and does not need to rebuild ONNX Runtime for the first QNN proof.
 
 ### Qualcomm acceleration
 
@@ -102,9 +102,9 @@ These are the working findings after reviewing the public Qualcomm, Arduino, ONN
 | --- | --- | --- |
 | Qualcomm runtime installation | Closed on the board | QAIRT 2.46.0 installs straight from apt on the stock image |
 | QCS8275 support | Closed on the board | Hexagon V75, soc_id 675, validator unit test executed on the DSP |
-| Full HTP model execution | Open, now the blocker | Needs an ONNX Runtime build with the QNN execution provider for linux-arm64 |
+| Full HTP model execution | TinyLlama failed, QNN-specific model open | Plugin registration and V75 execution work. Stock TinyLlama offloads only Shape/Gather/Cast and is slower than CPU |
 | .NET 11 ARM64 CPU package | Closed on the board | `Microsoft.ML.OnnxRuntimeGenAI` `0.17.1` generates tokens on the VENTUNO Q from a Native AOT binary |
-| .NET 11 ARM64 QNN package | Open, narrowed | Neither GenAI NuGet package ships `libonnxruntime_providers_qnn.so` |
+| .NET 11 ARM64 QNN package | Closed through native plugin | Official Linux ARM64 QNN plugin loads through Kare's C++ registration bridge |
 | GenieX service API | Available, Developer Preview | Use the C SDK or OpenAI-compatible server behind an adapter |
 | Copilot CLI transparent interception | Not supported by extensions | Use BYOK for provider redirection |
 | Copilot SDK cloud escalation | Feasible, not transparent | Kare owns route and session correlation |
@@ -113,13 +113,13 @@ These are the working findings after reviewing the public Qualcomm, Arduino, ONN
 
 1. Qualcomm runtime libraries on Ubuntu 24.04.5: yes, packages now exist for the required operating system and architecture. GenieX `0.7.1` publishes Linux ARM64 CLI, SDK, benchmark, and Python assets, and bundles compatible QAIRT libraries by default. `onnxruntime-qnn` `2.6.0` publishes Linux ARM64 inference artifacts for QAIRT `2.50.40`. Installation is no longer the research question. The device proof must verify library loading, FastRPC access, model loading, and inference on the VENTUNO Q image.
 
-2. QNN or QAIRT support for QCS8275 and HTP: yes for Qualcomm's GenieX and AI Hub path. GenieX explicitly lists Dragonwing IQ-8275, `QCS8275`, as `qualcomm-qcs8275`, and Qualcomm AI Hub publishes per-chipset assets for that target, including Qwen3 language models. The generic ONNX Runtime QNN page is behind this newer packaging story and still names Android and Windows. For Kare, the supported QCS8275 path is therefore strongest through GenieX and precompiled AI Hub bundles. The exact `soc_model` and `htp_arch` values needed for a hand-built ONNX Runtime QNN integration still need to be read from the installed QAIRT headers or queried on the device.
+2. QNN or QAIRT support for QCS8275 and HTP: yes. GenieX explicitly lists Dragonwing IQ-8275, `QCS8275`, as `qualcomm-qcs8275`, Qualcomm AI Hub publishes per-chipset assets for that target, and the board validator executed on Hexagon V75. The installed headers identify the matching Monaco target as QCS8300 `soc_model=82`, `htp_arch=75`, however live inference works without forcing those values when the plugin and QAIRT versions match.
 
-3. ONNX model compile path for HTP: not proven for the selected ONNX baseline. Keep Microsoft Phi-4-mini INT4 as the official ONNX Runtime GenAI CPU reference. Use Qwen3 1.7B W4A16 as the first Qualcomm accelerator reference, followed by Qwen3 4B W4A16, because Qualcomm publishes QCS8275-specific Genie assets for both. These Genie assets are per-chipset QAIRT bundles, not interchangeable ONNX Runtime GenAI model directories. The ONNX/QNN track must compile a separate GenAI-compatible model, record the assigned execution provider for every node, enable detailed or `optrace` profiling, and fail the gate if fallback materially affects prompt or decode latency. A community ONNX conversion is a lead, not proof.
+3. ONNX model compile path for HTP: failed for the stock Arm TinyLlama CPU graph. The matched QNN `2.2.0`, QAIRT `2.46.0`, and ORT `1.24.4` stack prepared and executed a V75 graph, however detailed profiling showed only the attention-mask Shape/Gather/Cast subgraph on HTP. TTFT regressed from 1.696 seconds on CPU to 4.683 seconds and decode dropped from about 23 to 17.31 tokens per second. Stop forcing this graph. Keep Microsoft Phi-4-mini INT4 as the CPU reference. Use Qwen3 1.7B W4A16 as the first Qualcomm accelerator reference, followed by Qwen3 4B W4A16, because Qualcomm publishes QCS8275-specific Genie assets for both. A QNN model passes only when profiling proves the useful transformer graph runs on HTP without unacceptable fallback.
 
 4. ONNX Runtime GenAI .NET 11 ARM64 support: closed for CPU, and this is now measured rather than inferred. `Microsoft.ML.OnnxRuntimeGenAI` `0.17.1` restores on `net11.0`, cross-publishes self-contained to `linux-arm64` from an x86_64 workstation, and ships aarch64 `libonnxruntime-genai.so` and `libonnxruntime.so`. The published Kare device probe was executed inside an aarch64 `ubuntu:24.04` container that reports Ubuntu 24.04.5 LTS, the same release as the board. It loaded the native library and reached a managed model-path error, which is the expected result with no model present. Kare does not need to build the CPU runtime.
 
-   Three details change the design. First, the package already ships `Microsoft.ML.OnnxRuntimeGenAI.OnnxRuntimeGenAIChatClient`, which implements `IChatClient`, so Kare does not hand-write a tokenizer and generator loop. It implements `IChatClient.GetService` explicitly, so the adapter has to cast. Second, `Config` exposes `AppendProvider`, `ClearProviders`, `SetProviderOption`, and `Overlay`, so execution provider selection is reachable from C# without touching JSON on disk. Third, and most important for the accelerator track, neither `Microsoft.ML.OnnxRuntimeGenAI` nor `Microsoft.ML.OnnxRuntime` ships `libonnxruntime_providers_qnn.so`. Only `libonnxruntime_providers_shared.so` is present. The string `QNNExecutionProvider` exists inside `libonnxruntime.so`, so the runtime knows the provider name, but the provider library itself is absent. Calling `AppendProvider("qnn")` is therefore necessary and not sufficient, and the QNN gate requires a custom native build or a repackaged provider library.
+   Three details change the design. First, the package already ships `Microsoft.ML.OnnxRuntimeGenAI.OnnxRuntimeGenAIChatClient`, which implements `IChatClient`, so Kare does not hand-write a tokenizer and generator loop. It implements `IChatClient.GetService` explicitly, so the adapter has to cast. Second, `Config` exposes `AppendProvider`, `ClearProviders`, `SetProviderOption`, and `Overlay`, so execution provider selection is reachable from C# without touching JSON on disk. Third, neither `Microsoft.ML.OnnxRuntimeGenAI` nor `Microsoft.ML.OnnxRuntime` ships `libonnxruntime_providers_qnn.so`, however the official `onnxruntime-qnn` Linux ARM64 package does. Kare registers it through `OgaRegisterExecutionProviderLibrary` behind a small C++ exception boundary. The remaining risk is model compatibility, not provider loading.
 
    Native AOT is the other half of this gate, and it is now closed too. ILCompiler produces correct aarch64 objects when cross-publishing, but the link step fails on an x86_64 host with `ld.bfd: unrecognised emulation mode: aarch64linux`. Linking inside an aarch64 Ubuntu 24.04 image removes the problem, which is what `build/Containerfile.arm64` and `build/publish-arm64.sh` do. The result is a 4.1 MB stripped aarch64 PIE executable that starts on Ubuntu 24.04.5 aarch64 and loads the ONNX Runtime GenAI native library. This confirms the pinned ARM64 build environment is a requirement, not a preference.
 
@@ -256,6 +256,8 @@ Then publish a self-contained `linux-arm64` AOT binary and validate it on a clea
 ### Model storage
 
 The initial 64 GB eMMC is enough for a small benchmark set, but model files, caches, logs, and system updates compete for space. Add M.2 NVMe before keeping several model variants or a large code index.
+
+The board does not take 2280 drives. It wants a 2230 M-key NVMe module. The exact, trusted part is more important than the marketing label on the Amazon listing. For a production-minded cache and PostgreSQL path, prefer a named drive with a printed part number, a real seller warranty, and a clear throughput and endurance rating.
 
 Use checksummed, versioned model directories. Do not download models into the Git repository.
 
@@ -563,8 +565,8 @@ Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run
 | --- | --- | --- |
 | 0 protect the boundary | Done | Ignore rules, no device detail in the repository, plan reviewed |
 | 1 device inventory | Closed | Ran on the board. 8 cores A78C plus A55, 15 GB, no swap, 34 GB free eMMC, `/dev/fastrpc-cdsp` present and openable, no QAIRT userspace, 48 thermal zones idle at 38.8 C |
-| 2 runtime proof | CPU closed on the board, NPU half open | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed and a unit test ran on the DSP. CPU inference measured on the board. Still need an ONNX Runtime build with the QNN execution provider. GenieX untested |
-| 3 model selection | First model running | Arm TinyLlama 1.1B int4 loads and generates. Phi-4-mini INT4 downloading. Final choice needs the board |
+| 2 runtime proof | CPU and QNN plumbing closed, useful NPU model open | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed. Official QNN plugin registers from .NET and executes a profiled HTP partition. Phi-4-mini now runs on the board. GenieX remains untested |
+| 3 model selection | TinyLlama CPU measured, TinyLlama QNN rejected, Phi-4-mini measured | Arm TinyLlama 1.1B int4 loads and generates, but only a trivial mask subgraph reaches HTP and performance regresses. Phi-4-mini INT4 loads through the .NET 11 ARM64 path but takes 26.4 seconds to first token at 256 prompt tokens. Final choice needs a Qualcomm model benchmark |
 | 4 service skeleton | Serving | `build/smoke-service.sh` passes end to end. Streaming and non-streaming completions, real token usage, bounds, admission control, route disclosure, local only policy. AOT published for ARM64 |
 | 5 cache and shared knowledge | Not started | |
 | 6 Copilot integration | Endpoint ready | BYOK endpoint serves. Copilot CLI has not been pointed at it yet |
@@ -587,6 +589,7 @@ Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run
 
 - Install the pinned ONNX Runtime GenAI NuGet package and verify Linux ARM64 native loading.
 - Run Phi-4-mini INT4 on CPU as the reference model.
+- Record Phi-4-mini prompt and decode behavior before choosing the local default.
 - Install pinned GenieX Linux ARM64 assets.
 - Run Qwen3 1.7B W4A16 through the QCS8275 QAIRT bundle.
 - Compare the published Q4_0 CPU, GPU, and NPU paths.

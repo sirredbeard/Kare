@@ -48,6 +48,7 @@ switch (command)
             ModelPath = modelPath,
             ModelId = Get("id") ?? Path.GetFileName(modelPath.TrimEnd('/')),
             ExecutionProvider = Get("provider"),
+            ExecutionProviderLibraryPath = Get("provider-library"),
         };
 
         foreach (var pair in (Get("provider-option") ?? string.Empty)
@@ -204,7 +205,9 @@ static void PrintUsage()
               ONNX Runtime GenAI native load status, thermal zones, and storage.
               Exit 3 when the ONNX Runtime GenAI native library does not load.
 
-          kare-probe bench --model <dir> [--provider qnn] [--provider-option k=v,k=v]
+          kare-probe bench --model <dir> [--provider qnn]
+                           [--provider-library <libonnxruntime_providers_qnn.so>]
+                           [--provider-option k=v,k=v]
                            [--prompt-tokens 1024] [--max-output-tokens 256]
                            [--iterations 10] [--warmup 2] [--out <file.json>]
               Runs sustained generation and records time to first token, decode rate,
