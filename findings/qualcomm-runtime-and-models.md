@@ -306,3 +306,14 @@ stream=true                    passed, data:[DONE]
 The served model id is `qualcomm/qwen3_1_7b:w4a16`, however requests must use `qualcomm/qwen3_1_7b` without the precision suffix in this build. The non-streaming response returned an empty model field and the default Qwen3 reasoning output even with a short prompt. Kare's adapter needs to normalize the model id, set the model's thinking policy, and restore the requested model name in its own response envelope.
 
 The CLI also logs that the llama.cpp OpenCL plugin cannot load because `libOpenCL.so.1` is absent. That does not block the QNN/QAIRT path. It blocks the separate OpenCL llama.cpp plugin until the board's GPU userspace is installed, so do not call the llama.cpp GPU path proven yet.
+
+The first quiet coding sample was coherent:
+
+```
+prompt       write IsValidMessage(string input)
+output       48 tokens before the test cap
+decode       23.1 tok/s
+first token  0.1 s
+```
+
+The response started with a correct `string.IsNullOrWhiteSpace`-style validation method. The max-token cap cut it off before the closing code fence, so this is a smoke-quality result, not a quality verdict. The next quality pass needs a larger output cap and a fixed coding task set.
