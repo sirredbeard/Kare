@@ -10,6 +10,7 @@ The project is in the early build stages. The research in `plan.md` still drives
 - `findings/` - low-format research notes, measurements, and source links
 - `src/Kare.Abstractions` - route, backend, and recording contracts
 - `src/Kare.Core` - bounds, admission control, route recording, route selection
+- `src/Kare.Inference.GenieX` - QCS8275 GenieX QAIRT adapter behind `IChatClient`
 - `src/Kare.Inference.OnnxGenAI` - ONNX Runtime GenAI adapter behind `IChatClient`
 - `src/Kare.Service` - OpenAI-compatible HTTP endpoint for Copilot CLI BYOK
 - `bench/Kare.DeviceProbe` - `kare-probe`, the device capability and benchmark tool

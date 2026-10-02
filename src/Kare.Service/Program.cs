@@ -2,6 +2,7 @@ using Kare.Abstractions;
 using Kare.Core.Inference;
 using Kare.Core.Options;
 using Kare.Core.Routing;
+using Kare.Inference.GenieX;
 using Kare.Inference.OnnxGenAI;
 using Kare.Service;
 using Kare.Service.Api;
@@ -33,6 +34,12 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<OnnxGenAiOptions>, OnnxGenAiOptionsValidator>();
 
+builder.Services
+    .AddOptions<GenieXOptions>()
+    .Bind(builder.Configuration.GetSection(GenieXOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<GenieXOptions>, GenieXOptionsValidator>();
+
 builder.Services.AddSingleton<InferenceGate>();
 builder.Services.AddSingleton<IRouteRecorder, MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
@@ -40,6 +47,8 @@ builder.Services.AddSingleton<SelectedBackend>();
 // The CPU backend is registered unconditionally and at the lowest priority so it stays
 // the fallback. Accelerator backends are added above it once they probe successfully.
 builder.Services.AddSingleton<ILocalInferenceBackend, OnnxGenAiBackend>();
+builder.Services.AddSingleton<ILocalInferenceBackend, GenieXBackend>();
+builder.Services.AddHttpClient(nameof(GenieXBackend));
 builder.Services.AddSingleton<LocalBackendSelector>();
 
 builder.Services.AddSingleton<IRouteSelector>(sp =>

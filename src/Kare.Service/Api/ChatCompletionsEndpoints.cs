@@ -181,7 +181,8 @@ public static class ChatCompletionsEndpoints
 
         var isFirst = true;
         var toolCallIndex = 0;
-        ChatCompletionChunk? lastChunk = null;
+        string? finishReason = null;
+        ChatCompletionUsage? usage = null;
 
         var stream = chatClient.GetStreamingResponseAsync(messages, chatOptions, context.RequestAborted);
         await foreach (var update in stream.ConfigureAwait(false))
@@ -192,13 +193,39 @@ public static class ChatCompletionsEndpoints
                 continue;
             }
 
+            usage ??= chunk.Usage;
+            chunk.Usage = null;
+
+            foreach (var choice in chunk.Choices)
+            {
+                finishReason ??= choice.FinishReason;
+                choice.FinishReason = null;
+            }
+
+            var hasPayload = chunk.Choices.Any(static choice =>
+                choice.Delta is
+                {
+                    Role: not null,
+                } or
+                {
+                    Content: not null,
+                } or
+                {
+                    ToolCalls.Count: > 0,
+                });
+
+            if (!hasPayload && !isFirst)
+            {
+                continue;
+            }
+
             isFirst = false;
-            lastChunk = chunk;
             await WriteEventAsync(context, chunk).ConfigureAwait(false);
         }
 
-        // The route disclosure goes out as a final chunk so a streamed answer still says
-        // where it came from. An empty delta keeps it valid for strict OpenAI clients.
+        // Terminal metadata goes out after all text and tool deltas. Some providers report
+        // finish_reason before their tool-call update, which strict OpenAI clients reject.
+        // Holding it here normalizes the order without changing generated content.
         var trailer = new ChatCompletionChunk
         {
             Id = responseId,
@@ -210,9 +237,10 @@ public static class ChatCompletionsEndpoints
                 {
                     Index = 0,
                     Delta = new ChatCompletionDelta(),
-                    FinishReason = lastChunk?.Choices is [{ FinishReason: null }] ? "stop" : null,
+                    FinishReason = finishReason ?? "stop",
                 },
             ],
+            Usage = usage,
             KareRoute = OpenAiTranslator.ToRouteEnvelope(decision),
         };
 

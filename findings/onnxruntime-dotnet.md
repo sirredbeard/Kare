@@ -115,7 +115,7 @@ qemu-aarch64-static: Could not open '/lib/ld-linux-aarch64.so.1': No such file o
 
 That is not a broken install. Pass `-r linux-x64` when running locally.
 
-Second trap. `build/publish-arm64.sh` mounts the repo at `/src` and builds in place, which leaves aarch64 `bin` and `obj` directories behind that poison the next local build. Fixed by pointing the container build at `artifacts/arm64-build/` for both `BaseOutputPath` and `BaseIntermediateOutputPath`.
+Second trap. `build/publish-arm64.sh` mounts the repo at `/src`. An earlier attempt to force every project into one shared `artifacts/arm64-build` intermediate tree caused generated assembly files to be compiled back into project references and produced duplicate assembly attributes. The script now uses the SDK's normal per-project `bin` and `obj` directories. The publish output still goes to the requested artifact directory, and `bin` and `obj` remain ignored build products.
 
 ## Measured 2026-10-02 on the VENTUNO Q, CPU inference is prefill bound
 
@@ -239,6 +239,24 @@ prompt       TTFT       decode
 ```
 
 The 256-token run above is faster than the earlier 32-token run because the first measurement includes more cold-start variance. Do not treat one-shot numbers as stable medians. The shape is still clear: Phi-4-mini spends most of its time in prompt processing, and increasing context hurts interactive latency quickly. The next benchmark pass needs warmup iterations and a fixed thread setting recorded in the report.
+
+## Measured 2026-10-02, Qwen3 1.7B through the NuGet path
+
+Downloaded the ONNX Runtime GenAI CPU INT4 layout from `onnx-community/Qwen3-1.7B-ONNX` and ran it through Kare's .NET 11 adapter using `Microsoft.ML.OnnxRuntimeGenAI` 0.17.1. `LD_LIBRARY_PATH` pointed only at the probe publish directory, so this used the package's ORT 1.30 ARM64 native payload, not the older ORT 1.24.4 QNN compatibility stack.
+
+```
+64-token target prompt
+TTFT        1.423 s median
+decode      14.66 tok/s median
+total       5.732 s median
+
+256-token target prompt
+TTFT        5.208 s median
+decode      13.20 tok/s median
+total       10.657 s median
+```
+
+This is the requested Qwen-on-ONNX NuGet measurement. It is a useful CPU fallback and much faster than Phi-4-mini on the same board, however the QCS8275 GenieX W4A16 path is faster on the same base model family, especially during prompt processing.
 
 ## Measured 2026-10-02, service path on the VENTUNO Q
 

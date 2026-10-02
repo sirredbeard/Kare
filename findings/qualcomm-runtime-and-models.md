@@ -16,6 +16,23 @@ Qualcomm AI Hub has QCS8275-specific assets for Qwen3 0.6B, 1.7B, 4B, and 8B. Th
 
 The Genie bundle is a per-chipset QAIRT artifact. It is not an ONNX Runtime GenAI model directory.
 
+## Measured 2026-10-02, native board build and streamed tool call
+
+The VENTUNO Q has the .NET 11 SDK installed locally. I built the current GenieX-enabled Kare service on the board itself instead of making the x86_64 host link ARM64 code through QEMU.
+
+```
+board       Ubuntu 24.04.5, aarch64
+SDK         .NET 11.0.100-rc.1.26425.128
+publish     self-contained linux-arm64 Native AOT
+wall time   89.36 seconds
+```
+
+The board-native build produced a working ARM64 Native AOT binary. The same publish through the x86_64 host's emulated ARM64 container was still running after the board build completed, so the board is the default publish location for this project while the target SDK remains installed there. Keep the container script as the reproducible fallback and for clean ARM64 environments.
+
+After starting GenieX 0.7.1 on `127.0.0.1:18181`, Kare selected `GenieXQairt` at priority 100. A streamed required-tool-call request produced the tool-call delta first, followed by the terminal chunk with `finish_reason=tool_calls`, usage, and `kare_route.backend=GenieXQairt`. The service returned `data: [DONE]` and stayed healthy.
+
+The first restart selected ONNX because GenieX was not running when Kare probed it. Kare's backend selection is made during service startup, so the sidecar must be supervised and started before Kare. When the sidecar was ready first, selection and streaming passed.
+
 The separate `onnxruntime-qnn` 2.6.0 release publishes Linux ARM64 inference assets and uses QAIRT 2.50.40. It does not publish a Linux NuGet package.
 
 Published VENTUNO Q Q4_0 GenieX llama.cpp numbers:
@@ -289,11 +306,13 @@ GenieX v0.7.1 was unpacked on the board. The CLI reports its bundled QAIRT runti
 The first inference used `compute=npu`, `power-mode=high_performance`, `think=false`, and a 64-token output. The QNN logs show HTP V75 detection, QNN device creation, context-binary loading, and all four token graph partitions executing.
 
 ```
-NPU          26.3 tok/s, 64 output tokens, 0.1 s first token
-CPU          20.3 tok/s, 64 output tokens, 0.1 s first token
+GenieX request, compute=npu   26.3 tok/s, 64 output tokens, 0.1 s first token
+GenieX request, compute=cpu   20.3 tok/s, 64 output tokens, 0.1 s first token
 ```
 
-The NPU result is about 30 percent faster than the GenieX CPU path for this short coding prompt. The larger gain is expected in prompt processing. The server later reported 483.87 prompt tokens/s and 27.90 predicted tokens/s for a 28-token prompt and 16-token output.
+Do not call the second number a clean CPU baseline yet. The asset is a compiled QAIRT bundle, and the log still showed QNN token graphs executing after `--compute cpu`. The flag did not turn this into the same model running through a separate CPU graph. The server later reported 483.87 prompt tokens/s and 27.90 predicted tokens/s for a 28-token prompt and 16-token output on the measured QNN path.
+
+The apples-to-apples runtime comparison is now a separate gate. `onnx-community/Qwen3-1.7B-ONNX` publishes an ONNX Runtime GenAI CPU INT4 layout based on the same `Qwen/Qwen3-1.7B` model. It is not the same quantization as Qualcomm's W4A16 bundle, however it gives us the same architecture, tokenizer family, prompt, output length, and board. Benchmark that before choosing GenieX over ONNX as the default runtime.
 
 GenieX also exposed the promised local server:
 
@@ -317,3 +336,83 @@ first token  0.1 s
 ```
 
 The response started with a correct `string.IsNullOrWhiteSpace`-style validation method. The max-token cap cut it off before the closing code fence, so this is a smoke-quality result, not a quality verdict. The next quality pass needs a larger output cap and a fixed coding task set.
+
+## Measured 2026-10-02, Qwen3 GenieX versus ONNX Runtime GenAI
+
+Ran the same base model family on the same board. This closes the comparison that the earlier TinyLlama and Phi results could not close.
+
+ONNX path:
+
+```
+source        onnx-community/Qwen3-1.7B-ONNX
+layout        onnxruntime/cpu_and_mobile/cpu-int4-kld-block-128
+base model    Qwen/Qwen3-1.7B
+runtime       Microsoft.ML.OnnxRuntimeGenAI 0.17.1 NuGet
+native ORT    packaged Linux ARM64 ORT 1.30, CPU
+model size    1.409 GB
+model sha256  9fddc5a0a7f9c51132c376db8fe44774b17a8e42d721c4d289ade16af87da0bd
+```
+
+GenieX path:
+
+```
+source        Qualcomm AI Hub Models 0.63.0
+layout        QCS8275 geniex_qairt W4A16 context binaries
+base model    Qwen/Qwen3-1.7B
+runtime       GenieX 0.7.1, bundled QAIRT 2.45
+device        QNN HTP V75
+```
+
+The quantization and runtime layouts differ. This is the closest maintained same-model comparison available, not a bit-identical model file comparison.
+
+Short generated C# review prompt, 64 output tokens, one warmup and three measured ONNX iterations:
+
+```
+ONNX CPU      TTFT 1.423 s, decode 14.66 tok/s, total 5.732 s
+GenieX QNN    prompt processing about 0.058 to 0.068 s on stable runs,
+              decode median about 25.8 tok/s
+```
+
+Longer generated C# review prompt:
+
+```
+ONNX CPU      TTFT 5.208 s, decode 13.20 tok/s, total 10.657 s
+GenieX QNN    377 prompt tokens in median 0.229 s, about 1647 prompt tok/s,
+              decode median 21.39 tok/s
+```
+
+GenieX wins the measured runtime comparison. The useful difference is prompt processing, roughly 0.23 seconds versus 5.21 seconds on the longer prompt. Decode is also about 1.6 times faster. That is enough to choose GenieX QNN as the default local runtime and retain ONNX Runtime GenAI CPU as the no-NPU fallback.
+
+Quality is not settled by speed. A five-prompt coding smoke set produced:
+
+```
+case            ONNX GenAI                         GenieX QNN
+whitespace      correct                            correct
+off by one      correct                            correct
+cancellation    syntax error, wrong shape          wrong signature
+dispose         did not dispose response            did not dispose response
+null count      did not handle null                 did not handle null
+```
+
+Both paths solved two of five exact tasks. Neither is ready to generate unreviewed patches. GenieX returned results in 0.8 to 2.2 seconds after model load; ONNX took 2.5 to 10.8 seconds. Keep validation and cloud escalation in the design.
+
+The OpenAI server path emits empty `<think></think>` tags even with `/no_think` in the system message. The ONNX chat-template path sometimes emits malformed closing fences or a stray no-think marker. Kare needs output cleanup for empty reasoning tags, but must not hide non-empty reasoning or silently rewrite code.
+
+## Measured 2026-10-02, GenieX behind Kare
+
+Kare now has a `GenieXBackend` behind `IChatClient`. It uses Microsoft's OpenAI protocol adapter against the loopback GenieX endpoint. It does not call OpenAI or require an OpenAI account. The configured endpoint must be loopback, the model id must omit the `:w4a16` suffix, and the backend probes `/v1/models` before it can be selected.
+
+On the board:
+
+```
+GenieX available     Kare selected GenieXQairt at priority 100
+GenieX absent        Kare selected OnnxGenAiCpu at priority 0
+non-streaming        passed with usage and GenieXQairt route metadata
+streaming            passed with usage, route metadata, and data: [DONE]
+required tool call   passed, get_weather("Seattle")
+streamed tool call   passed
+tool result turn     passed
+client cancellation  request stopped, /health remained responsive
+```
+
+The OpenAI adapter can report `finish_reason=tool_calls` before the streamed tool-call delta. Kare now holds terminal metadata until the final SSE chunk, so tool arguments arrive before the finish reason. This is protocol normalization, not content rewriting.

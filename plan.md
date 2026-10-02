@@ -276,6 +276,8 @@ Use this order:
 5. Publish Native AOT on the device or in a pinned Ubuntu 24.04 ARM64 build environment.
 6. Attempt x86_64 to ARM64 cross-publishing only after the native dependency set is reproducible.
 
+The board-native path is currently the fastest measured path. On 2026-10-02, the VENTUNO Q restored and published the GenieX-enabled service as self-contained Native AOT in 89.36 seconds. The x86_64 host's emulated ARM64 container was still linking after the board completed. Use the board SDK for active iterations, and keep `build/publish-arm64.sh` as the reproducible container fallback.
+
 The release artifact should target `linux-arm64`, carry no .NET runtime requirement, and keep models and Qualcomm libraries outside the main executable. Do not call the deployment a single binary when separate provider libraries are still required.
 
 ### Managed service
@@ -565,11 +567,11 @@ Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run
 | --- | --- | --- |
 | 0 protect the boundary | Done | Ignore rules, no device detail in the repository, plan reviewed |
 | 1 device inventory | Closed | Ran on the board. 8 cores A78C plus A55, 15 GB, no swap, 34 GB free eMMC, `/dev/fastrpc-cdsp` present and openable, no QAIRT userspace, 48 thermal zones idle at 38.8 C |
-| 2 runtime proof | Closed for first QCS8275 NPU candidate | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed. Official QNN plugin registers from .NET and executes a profiled HTP partition. GenieX v0.7.1 loads the Qualcomm Qwen3 1.7B W4A16 QCS8275 bundle and serves it through QNN/HTP |
-| 3 model selection | Qwen3 NPU candidate measured, final choice open | Arm TinyLlama 1.1B int4 loads and generates, but only a trivial mask subgraph reaches HTP and performance regresses. Phi-4-mini INT4 is the CPU reference. Qwen3 1.7B W4A16 produced 26.3 tok/s on NPU versus 20.3 tok/s on board CPU for a 64-token coding response. Quality and longer-context measurements remain |
-| 4 service skeleton | Serving on the board | ARM64 service published and started on the VENTUNO Q with the project-local .NET 11 runtime. Health, model listing, a real Phi-4-mini completion, streaming, route disclosure, token usage, and empty-message rejection all passed. |
+| 2 runtime proof | Closed for first QCS8275 NPU candidate | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed. GenieX v0.7.1 loads the Qualcomm Qwen3 1.7B W4A16 QCS8275 bundle and serves it through QNN/HTP. Kare selects it through `IChatClient` and falls back to ONNX Qwen3 CPU when the sidecar is absent |
+| 3 model selection | First default selected, quality gate open | Qwen3 1.7B is now measured through both GenieX QNN and the .NET ONNX Runtime GenAI NuGet path. GenieX wins prompt processing and decode, so it is the default local runtime. ONNX Qwen3 CPU is the fallback. Both solved only two of five exact coding smoke tasks, so validation and cloud escalation remain required |
+| 4 service skeleton | Serving both local backends on the board | ARM64 Native AOT service selects GenieX QNN first and ONNX Qwen3 CPU as fallback. Native board publish takes 89.36 seconds. Health, models, non-streaming, streaming, usage, cancellation, required tool calls, streamed tool calls, tool results, bounds, and route disclosure passed. Streamed tool-call ordering was verified on the board |
 | 5 cache and shared knowledge | Not started | |
-| 6 Copilot integration | Endpoint ready | BYOK endpoint serves. Copilot CLI has not been pointed at it yet |
+| 6 Copilot integration | BYOK protocol path ready for CLI test | The endpoint now preserves streaming, required tool calls, streamed tool calls, tool results, cancellation, usage, and route metadata through GenieX. Copilot CLI has not been pointed at it yet |
 | 7 Lerna and Foundry | Not started | |
 
 ### Stage 0: protect the boundary

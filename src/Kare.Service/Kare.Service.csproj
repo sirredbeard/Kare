@@ -16,6 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="../Kare.Abstractions/Kare.Abstractions.csproj" />
     <ProjectReference Include="../Kare.Core/Kare.Core.csproj" />
+    <ProjectReference Include="../Kare.Inference.GenieX/Kare.Inference.GenieX.csproj" />
     <ProjectReference Include="../Kare.Inference.OnnxGenAI/Kare.Inference.OnnxGenAI.csproj" />
   </ItemGroup>
 
