@@ -1,0 +1,27 @@
+# Local credentials and device configuration
+.env
+.env.*
+*.secret
+*.token
+*.key
+local/
+private/
+device-config/
+.copilot/
+lerna-auth.json
+settings.local.json
+known_hosts
+*.pem
+
+# Local model files and generated artifacts
+models/
+artifacts/
+benchmarks/results/
+bin/
+obj/
+publish/
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store

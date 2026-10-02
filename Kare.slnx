@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Kare.Abstractions/Kare.Abstractions.csproj" />
+    <Project Path="src/Kare.Core/Kare.Core.csproj" />
+    <Project Path="src/Kare.Inference.OnnxGenAI/Kare.Inference.OnnxGenAI.csproj" />
+    <Project Path="src/Kare.Service/Kare.Service.csproj" />
+  </Folder>
+  <Folder Name="/bench/">
+    <Project Path="bench/Kare.DeviceProbe/Kare.DeviceProbe.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Kare.Tests/Kare.Tests.csproj" />
+  </Folder>
+</Solution>
