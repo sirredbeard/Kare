@@ -228,3 +228,14 @@ requested API version 25, supported 1 and 24
 ```
 
 The model still loads and generates. This is a compatibility warning from the QNN-matched ORT 1.24.4 native stack, not a failed CPU inference. Keep it visible in device logs and do not call the stack fully current until the native versions are aligned.
+
+Prompt scaling, one cold process per run, 16 output tokens:
+
+```
+prompt       TTFT       decode
+64           10.54 s    7.85 tok/s
+128          12.59 s    9.34 tok/s
+256          19.09 s    6.93 tok/s
+```
+
+The 256-token run above is faster than the earlier 32-token run because the first measurement includes more cold-start variance. Do not treat one-shot numbers as stable medians. The shape is still clear: Phi-4-mini spends most of its time in prompt processing, and increasing context hurts interactive latency quickly. The next benchmark pass needs warmup iterations and a fixed thread setting recorded in the report.
