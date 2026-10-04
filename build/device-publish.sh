@@ -37,6 +37,7 @@ PROJECT="$REPO_ROOT/src/Kare.Service/Kare.Service.csproj"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
 OUTPUT="$REPO_ROOT/artifacts/kare-service-arm64-$MODE"
 RELEASE="$DEPLOY_ROOT/releases/$COMMIT-$MODE"
+CURRENT="$DEPLOY_ROOT/current"
 
 if [[ ! -x "$DOTNET" ]]; then
     echo "Missing project-local .NET SDK: $DOTNET" >&2
@@ -44,7 +45,8 @@ if [[ ! -x "$DOTNET" ]]; then
 fi
 
 if [[ "$OUTPUT" != "$REPO_ROOT/artifacts/"* ||
-      "$RELEASE" != "$DEPLOY_ROOT/releases/"* ]]; then
+      "$RELEASE" != "$DEPLOY_ROOT/releases/"* ||
+      "$CURRENT" != "$DEPLOY_ROOT/current" ]]; then
     echo "Refusing to use an unexpected publish or release path." >&2
     exit 1
 fi
@@ -83,7 +85,15 @@ find "$RELEASE" -maxdepth 1 -type f \
     ! -name '*.so' ! -name '*.json' ! -name '*.dbg' \
     -exec chmod +x {} +
 
-ln -sfn "$RELEASE" "$DEPLOY_ROOT/current"
+if [[ -e "$CURRENT" && ! -L "$CURRENT" ]]; then
+    LEGACY="$DEPLOY_ROOT/releases/legacy-current-$(date -u +%Y%m%d%H%M%S)"
+    mv "$CURRENT" "$LEGACY"
+fi
+
+NEXT="$DEPLOY_ROOT/current.next"
+rm -f "$NEXT"
+ln -s "$RELEASE" "$NEXT"
+mv -Tf "$NEXT" "$CURRENT"
 systemctl --user restart kare.service
 sleep 2
 curl --fail --silent http://127.0.0.1:5285/health
