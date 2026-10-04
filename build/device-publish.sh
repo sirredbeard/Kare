@@ -95,6 +95,10 @@ rm -f "$NEXT"
 ln -s "$RELEASE" "$NEXT"
 mv -Tf "$NEXT" "$CURRENT"
 systemctl --user restart kare.service
-sleep 2
-curl --fail --silent http://127.0.0.1:5285/health
+curl --fail --silent \
+    --retry 30 \
+    --retry-delay 1 \
+    --retry-connrefused \
+    --max-time 2 \
+    http://127.0.0.1:5285/health
 printf '\nDeployed %s from %s\n' "$MODE" "$COMMIT"
