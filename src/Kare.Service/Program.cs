@@ -10,6 +10,7 @@ using Kare.Service.Api;
 using Kare.Service.Cache;
 using Kare.Service.Dashboard;
 using Kare.Service.Options;
+using Kare.Service.Routing;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -80,6 +81,7 @@ builder.Services.AddSingleton<InferenceGate>();
 builder.Services.AddSingleton<MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
 builder.Services.AddSingleton<ResponseCache>();
+builder.Services.AddSingleton<CascadeRouteContext>();
 builder.Services.AddSingleton<IDashboardMetricsCollector, InMemoryMetricsCollector>();
 builder.Services.AddSingleton<IModelEndpointProvider, ModelEndpointProvider>();
 builder.Services.AddSingleton<DashboardKnowledgeService>();
@@ -113,16 +115,6 @@ builder.Services.AddSingleton<ILocalInferenceBackend, GenieXBackend>();
 builder.Services.AddHttpClient(nameof(GenieXBackend));
 builder.Services.AddSingleton<LocalBackendSelector>();
 
-builder.Services.AddSingleton<IRouteSelector>(sp =>
-{
-    var selected = sp.GetRequiredService<SelectedBackend>();
-    return new ConfiguredRouteSelector(
-        sp.GetRequiredService<IOptions<RoutePolicyOptions>>(),
-        selected.Kind,
-        selected.ModelId,
-        sp.GetRequiredService<ICloudModelCatalog>());
-});
-
 builder.Services.AddSingleton<IChatClient>(sp =>
 {
     var selected = sp.GetRequiredService<SelectedBackend>();
@@ -135,11 +127,16 @@ builder.Services.AddSingleton<IChatClient>(sp =>
     boundedLocal = new ContextEnrichingChatClient(
         boundedLocal,
         sp.GetRequiredService<IDashboardKnowledgeService>());
-    return new KareRoutingChatClient(
+    return new HydraFusionCascadeChatClient(
         boundedLocal,
         sp.GetRequiredService<ICloudInferenceBackend>(),
-        sp.GetRequiredService<IRouteSelector>(),
+        sp.GetRequiredService<ICloudModelCatalog>(),
         sp.GetRequiredService<IRouteRecorder>(),
+        sp.GetRequiredService<ResponseCache>(),
+        sp.GetRequiredService<CascadeRouteContext>(),
+        sp.GetRequiredService<IOptions<RoutePolicyOptions>>(),
+        selected.Kind,
+        selected.ModelId,
         sp.GetRequiredService<ILoggerFactory>());
 });
 

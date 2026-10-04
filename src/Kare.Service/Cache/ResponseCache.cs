@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Kare.Abstractions;
 using Kare.Service.Dashboard;
 using Kare.Service.Options;
 using Microsoft.Extensions.AI;
@@ -15,6 +16,7 @@ namespace Kare.Service.Cache;
 public sealed class ResponseCache : IDisposable
 {
     private const string CacheVersion = "kare-response-v1";
+    private const string CascadeCacheVersion = "kare-cascade-route-v1";
     private readonly ResponseCacheOptions _options;
     private readonly MemoryCache _cache;
     private readonly IDashboardMetricsCollector? _dashboard;
@@ -109,6 +111,67 @@ public sealed class ResponseCache : IDisposable
             "application/json"));
     }
 
+    /// <summary>Gets a cached cloud target selected by the local cascade gate.</summary>
+    public bool TryGetCascadeTarget(
+        IReadOnlyList<ChatMessage> decisionMessages,
+        ChatOptions? options,
+        IReadOnlyList<CloudModelDescriptor> candidates,
+        out string? target)
+    {
+        target = null;
+        if (!TryCreateCascadeKey(decisionMessages, options, candidates, out var key) ||
+            !_cache.TryGetValue(key, out string? cachedTarget) ||
+            string.IsNullOrWhiteSpace(cachedTarget))
+        {
+            return false;
+        }
+
+        target = cachedTarget;
+        _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
+            key,
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            Encoding.UTF8.GetByteCount(cachedTarget),
+            "application/vnd.kare.cascade-route"));
+        return true;
+    }
+
+    /// <summary>Caches only the selected cloud target, never prompt or response text.</summary>
+    public void SetCascadeTarget(
+        IReadOnlyList<ChatMessage> decisionMessages,
+        ChatOptions? options,
+        IReadOnlyList<CloudModelDescriptor> candidates,
+        string target)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        if (!TryCreateCascadeKey(decisionMessages, options, candidates, out var key))
+        {
+            return;
+        }
+
+        _cache.Set(
+            key,
+            target,
+            new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow =
+                    TimeSpan.FromSeconds(_options.EntryLifetimeSeconds),
+                Size = 1,
+            });
+
+        lock (_keysSync)
+        {
+            _keys.Add(key);
+        }
+
+        _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
+            key,
+            DateTime.UtcNow,
+            LastAccessedAt: null,
+            Encoding.UTF8.GetByteCount(target),
+            "application/vnd.kare.cascade-route"));
+    }
+
     /// <summary>Removes a cached response by its opaque hash key.</summary>
     public void Remove(string key)
     {
@@ -187,6 +250,51 @@ public sealed class ResponseCache : IDisposable
                 }
 
                 Append(hash, text.Text);
+            }
+        }
+
+        key = Convert.ToHexString(hash.GetHashAndReset());
+        return true;
+    }
+
+    private bool TryCreateCascadeKey(
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
+        IReadOnlyList<CloudModelDescriptor> candidates,
+        out string key)
+    {
+        key = string.Empty;
+        if (!_options.Enabled || candidates.Count == 0)
+        {
+            return false;
+        }
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Append(hash, CascadeCacheVersion);
+        Append(hash, _knowledge?.ContextVersion);
+        Append(hash, options?.MaxOutputTokens);
+        Append(hash, options?.ToolMode);
+
+        foreach (var candidate in candidates)
+        {
+            Append(hash, candidate.Id);
+            Append(hash, candidate.ModelId);
+            Append(hash, candidate.Priority);
+            Append(hash, candidate.SupportsTools);
+        }
+
+        foreach (var tool in options?.Tools?.OfType<AIFunctionDeclaration>() ?? [])
+        {
+            Append(hash, tool.Name);
+            Append(hash, tool.Description);
+        }
+
+        foreach (var message in messages)
+        {
+            Append(hash, message.Role.Value);
+            foreach (var content in message.Contents)
+            {
+                Append(hash, content is TextContent text ? text.Text : content.GetType().FullName);
             }
         }
 

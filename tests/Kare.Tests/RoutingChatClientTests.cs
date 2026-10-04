@@ -1,4 +1,5 @@
 using Kare.Abstractions;
+using Kare.Core;
 using Kare.Core.Routing;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -33,6 +34,31 @@ public sealed class RoutingChatClientTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("copilot-flash", cloud.SelectedModelId);
+    }
+
+    [Fact]
+    public async Task RouteRecorderCapturesNonStreamingFailure()
+    {
+        var recorder = new CapturingRouteRecorder();
+        var decision = new RouteDecision(
+            KareRoute.CopilotLight,
+            "test",
+            "test-model",
+            BackendKind.Remote,
+            IsBillable: true);
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        using var client = new Kare.Core.Inference.RouteRecordingChatClient(
+            new ThrowingChatClient(),
+            decision,
+            recorder,
+            loggerFactory.CreateLogger<Kare.Core.Inference.RouteRecordingChatClient>());
+
+        await Assert.ThrowsAsync<CloudInferenceException>(() =>
+            client.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, "hello")],
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.False(Assert.Single(recorder.Usages).Succeeded);
     }
 
     private sealed class StaticRouteSelector(RouteDecision decision) : IRouteSelector
@@ -104,5 +130,48 @@ public sealed class RoutingChatClientTests
             RouteUsage usage,
             CancellationToken cancellationToken = default) =>
             ValueTask.CompletedTask;
+    }
+
+    private sealed class CapturingRouteRecorder : IRouteRecorder
+    {
+        public List<RouteUsage> Usages { get; } = [];
+
+        public ValueTask RecordAsync(
+            RouteDecision decision,
+            RouteUsage usage,
+            CancellationToken cancellationToken = default)
+        {
+            Usages.Add(usage);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingChatClient : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            throw new CloudInferenceException("failed");
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask;
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                throw new CloudInferenceException("failed");
+            }
+
+            yield break;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 }

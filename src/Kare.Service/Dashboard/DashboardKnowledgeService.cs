@@ -278,6 +278,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
         if (removed)
         {
+            Interlocked.Increment(ref _contextVersion);
             _collector.RemoveMcpServer(name);
             await PersistAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -294,11 +295,18 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
         SourceRegistration[] sources;
         SkillRegistration[] skills;
+        DashboardMetrics.McpServerInfo[] mcpServers;
         lock (_sync)
         {
             sources = [.. _sources.Values.Where(static item => item.Enabled)];
             skills = [.. _skills.Values.Where(static item => item.Enabled)];
         }
+        mcpServers =
+        [
+            .. _collector.GetMcpServers()
+                .Where(static server => server.Connected)
+                .OrderBy(static server => server.Name, StringComparer.Ordinal),
+        ];
 
         foreach (var source in sources)
         {
@@ -343,6 +351,15 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 MaxInjectedCharacters);
         }
 
+        foreach (var server in mcpServers)
+        {
+            AppendBounded(
+                contentBuffer,
+                $"\nConnected MCP server: {server.Name}\n" +
+                $"Capabilities: {string.Join(", ", server.Capabilities)}\n",
+                MaxInjectedCharacters);
+        }
+
         if (contentBuffer.Length == 0)
         {
             return messages;
@@ -351,7 +368,9 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         var context = new StringBuilder(MaxInjectedCharacters);
         context.AppendLine(
             "The following Kare-managed sources and skills are authoritative for this request. " +
-            "Prefer them over model memory and cite source URLs when applicable.");
+            "Prefer them over model memory and cite source URLs when applicable. Connected MCP " +
+            "server metadata is advisory: do not claim to have called a server unless the caller " +
+            "provided and executed a matching tool.");
         AppendBounded(context, contentBuffer.ToString(), MaxInjectedCharacters);
 
         return
@@ -569,7 +588,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 LastConnectedAt: now,
                 LastCheckedAt: now,
                 Error: null);
-            _collector.RegisterMcpServer(metric);
+            RegisterMcpServer(metric);
             return metric;
         }
         catch (Exception ex) when (
@@ -585,8 +604,21 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 LastConnectedAt: null,
                 LastCheckedAt: now,
                 ex.Message);
-            _collector.RegisterMcpServer(metric);
+            RegisterMcpServer(metric);
             return metric;
+        }
+    }
+
+    private void RegisterMcpServer(DashboardMetrics.McpServerInfo metric)
+    {
+        var previous = _collector.GetMcpServers()
+            .FirstOrDefault(server => string.Equals(server.Name, metric.Name, StringComparison.Ordinal));
+        _collector.RegisterMcpServer(metric);
+        if (previous is null ||
+            previous.Connected != metric.Connected ||
+            !previous.Capabilities.SequenceEqual(metric.Capabilities, StringComparer.Ordinal))
+        {
+            Interlocked.Increment(ref _contextVersion);
         }
     }
 

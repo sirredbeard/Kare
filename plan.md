@@ -1,6 +1,6 @@
 # Kare plan
 
-Kare should be a fast authenticated OpenAI-compatible conduit for coding assistance. Qwen through GenieX is the default local sidecar for bounded passive work such as cache assistance, context preparation, and skill maintenance. Kare owns deterministic tier selection for local, GitHub Copilot, and Microsoft Foundry routes. The design is inspired by the public HydraFusion orchestration patterns and Lerna's provider mapping, but it does not claim to run GitHub's native HydraFusion implementation or Lerna itself.
+Kare should be a fast authenticated OpenAI-compatible conduit for coding assistance. Qwen through GenieX is the bounded local answer-or-route gate for cache assistance, authoritative context, skill maintenance, and cloud selection. Kare owns an ordered cascade across local Qwen, GitHub Copilot, and Microsoft Foundry routes. The design is inspired by the public HydraFusion orchestration patterns and Lerna's provider mapping, but it does not claim to run GitHub's native HydraFusion implementation or Lerna itself.
 
 This document is a plan, not a claim that the design has been proven. The service should not be coded until the device runtime, model quality, Copilot integration point, and cloud accounting have been tested.
 
@@ -201,7 +201,7 @@ The signed-in GitHub Copilot account currently exposes the public model families
 
 The protected Azure account currently exposes 163 Foundry model definitions and five active deployments. The active deployments are `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `claude-sonnet-4-6`, and `claude-opus-5`. `gpt-5.6-sol` and `claude-sonnet-4-6` are now catalog candidates. The available model list includes cheaper-looking small models such as `gpt-5.4-mini`, `gpt-5.4-nano`, `Phi-4-mini-instruct`, and `qwen3-32b`, but pricing, quota, deployment capacity, tool support, and latency are not yet verified. Do not call a model cheaper until Azure pricing or measured account cost confirms it.
 
-The protected catalog now adds explicit, non-default routes for the deployed `gpt-5.6-sol` and `claude-sonnet-4-6` models. Existing `kare-fast`, `kare-copilot`, and `kare-complex` behavior remains unchanged. New routes must pass streaming, cancellation, usage, and failure tests before they receive automatic-routing priority.
+The protected catalog includes explicit routes for the deployed `gpt-5.6-sol` and `claude-sonnet-4-6` models. Kare exposes one public `kare` model and orders eligible catalog entries by configured priority. New routes must pass streaming, cancellation, usage, tool, and failure tests before they receive cascade priority.
 
 ## Model and runtime plan
 
@@ -370,9 +370,11 @@ OpenAI-compatible client
   -> local Qwen/GenieX, a concrete GitHub Copilot model, or a configured Foundry deployment
 ```
 
-The first Kare-owned selector uses request characters, message count, tool declarations, explicit wire model IDs, and configured thresholds. It does not call a model to decide whether to spend credits. The selected concrete provider model replaces the public Kare alias before cloud dispatch, and every response records the actual route and model.
+Kare exposes one public wire model ID, `kare`. The bounded cascade first checks a safe cached cloud target, then asks local Qwen to return either an authoritative answer or one configured cloud target. The Qwen gate receives only compact request metadata and the latest user text, without caller tools. Dashboard-managed authoritative sources and skills are injected into this local decision. Connected MCP names and advertised capabilities are advisory metadata only and are not tool execution.
 
-This is HydraFusion-inspired routing, not GitHub HydraFusion. The initial implementation performs one provider call. Cascade, critique, ensemble, and retry strategies remain later bounded features and must preserve streaming, cancellation, tool ownership, budgets, and route accounting.
+If Qwen escalates or fails before answering, Kare calls the selected cloud target and advances through later configured targets only when a provider fails before returning output. Once a streaming provider emits output, Kare does not switch models because mixed-provider output would be unsafe. Tool-bearing requests consider only catalog entries with confirmed tool support.
+
+This is HydraFusion-inspired routing, not GitHub HydraFusion. It is a bounded answer-or-route decision, not a second agent loop. Copilot or the calling client still owns tool execution, permissions, and repository mutation.
 
 Kare should record:
 
@@ -386,15 +388,7 @@ Kare should record:
 
 Do not claim that a local cache reduces Copilot billing until the Copilot call is actually avoided and the result is verified against the provider's accounting.
 
-Kare exposes five explicit wire model IDs:
-
-- `kare-local` always selects local Qwen through GenieX.
-- `kare-fast` selects a configured low-cost Copilot model from an ordered pool.
-- `kare-copilot` selects the configured heavy Copilot model, which defaults to GitHub `auto`.
-- `kare-complex` selects the configured Microsoft Foundry deployment.
-- `kare-auto` applies deterministic tier selection. Automatic billable escalation remains disabled by default.
-
-The automatic rule uses configured moderate and complex character thresholds plus message and tool counts. Within the moderate pool, larger or tool-bearing requests select progressively stronger configured models. This is an admission and cost policy, not an LLM quality judgment, and the current implementation does not retry a weak answer in another model.
+Legacy route aliases remain configuration compatibility fields but are not advertised or used by the service runtime. Protected deployment configuration enables the cascade and defines the priority order. Repository defaults keep cloud routing disabled and loopback-only.
 
 ### Cost policy
 
@@ -669,12 +663,12 @@ runtime                project-local .NET 11 RC on the board
 - Run client-side BYOK tests with an isolated `COPILOT_HOME` so unrelated local plugins cannot change the request.
 - Add the Copilot SDK cloud route. GitHub account routes leave provider configuration unset. Foundry routes use explicit external provider configuration. GitHub `auto` was live-tested on x64.
 - Preserve permissions, streaming, cancellation, and session behavior. Caller tools are declaration-only and are not executed on the board. Cloud text deltas now stream; active-request cancellation still needs board validation.
-- Add explicit local versus cloud policy. Implemented as `kare-local`, `kare-copilot`, and disabled-by-default deterministic `kare-auto`.
+- Replace explicit client-selected modes with one public `kare` model. Implemented as a bounded cache, Qwen gate, and ordered cloud cascade. Protected deployment configuration must opt in to cloud escalation.
 - Test an extension or plugin interceptor only as a separate experimental track.
 
 ### Stage 7: Kare orchestration and Foundry
 
-- Keep the deterministic local, moderate Copilot, heavy Copilot, and complex Foundry tiers explicit.
+- Keep cloud routes, tool support, and escalation priority explicit in the protected catalog.
 - Validate every configured Copilot model against the account before enabling automatic billable routing.
 - Recheck the official Copilot model list and the installed CLI account during each catalog refresh. Public availability is not proof of entitlement or SDK compatibility.
 - Configure each Foundry deployment outside the repository with an HTTPS resource base URL, a well-known model ID, a separate wire deployment name, the Responses or Anthropic Messages wire, and an authentication mode.
@@ -682,7 +676,7 @@ runtime                project-local .NET 11 RC on the board
 - Record model version, deployment SKU, capacity, tool support, streaming behavior, latency, and observed cost before changing route priority. Availability alone is not a price comparison.
 - Prefer scoped Entra bearer tokens. Kare currently obtains Azure access tokens from a protected Azure CLI profile with a bounded command timeout and in-memory reuse by scope. The SDK may ask for a token before each provider request, but `az account get-access-token` runs only on a cold cache or during the two-minute refresh window. Managed identity is a later option if the deployment environment supports it.
 - Test each mapped model with a known request and verify streaming, cancellation, caller-owned tool calls, route metadata, latency, and usage. Keep Foundry tool support disabled in the catalog until those tests pass.
-- Add cascade or critique only as a later bounded strategy with an explicit maximum provider-call count and budget.
+- Keep critique and ensemble strategies out until they have explicit provider-call and budget limits. The implemented cascade retries only provider failures that occur before output starts.
 - Do not put Lerna source, settings, or auth files in Kare.
 
 ### Stage 8: AOT release

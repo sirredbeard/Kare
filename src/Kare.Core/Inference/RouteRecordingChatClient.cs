@@ -46,7 +46,24 @@ public sealed class RouteRecordingChatClient : DelegatingChatClient
         }
         catch (OperationCanceledException)
         {
-            await RecordAsync(start, start, null, null, succeeded: false, cancellationToken).ConfigureAwait(false);
+            await RecordAsync(
+                start,
+                start,
+                firstTokenTimestamp: null,
+                usage: null,
+                succeeded: false,
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        catch
+        {
+            await RecordAsync(
+                start,
+                Stopwatch.GetTimestamp(),
+                firstTokenTimestamp: null,
+                usage: null,
+                succeeded: false,
+                CancellationToken.None).ConfigureAwait(false);
             throw;
         }
 

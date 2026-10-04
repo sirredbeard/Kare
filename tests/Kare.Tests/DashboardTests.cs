@@ -237,6 +237,50 @@ public sealed class DashboardTests
         }
     }
 
+    [Fact]
+    public async Task ConnectedMcpCapabilitiesAreInjectedAsAdvisoryContext()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new StaticResponseHandler(
+            """{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{},"resources":{}}}}""",
+            "application/json"));
+
+        try
+        {
+            var collector = new InMemoryMetricsCollector();
+            var service = new DashboardKnowledgeService(
+                collector,
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            var initialVersion = service.ContextVersion;
+
+            await service.AddMcpServerAsync(
+                new CreateDashboardMcpServerRequest("workspace-tools", "https://1.1.1.1/mcp"),
+                TestContext.Current.CancellationToken);
+            var enriched = await service.AddLocalContextAsync(
+                [new ChatMessage(ChatRole.User, "What tools are connected?")],
+                TestContext.Current.CancellationToken);
+
+            Assert.NotEqual(initialVersion, service.ContextVersion);
+            var context = enriched[0].Contents.OfType<TextContent>().Single().Text;
+            Assert.Contains("Connected MCP server: workspace-tools", context, StringComparison.Ordinal);
+            Assert.Contains("Capabilities: tools, resources", context, StringComparison.Ordinal);
+            Assert.Contains("do not claim to have called a server", context, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            Directory.Delete(directory);
+        }
+    }
+
     private static DashboardMetrics.RequestMetric CreateRequest(
         long inputTokens,
         long outputTokens,

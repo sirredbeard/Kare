@@ -1,6 +1,6 @@
 # Kare
 
-Kare is an authenticated OpenAI-compatible conduit for coding work. It is intended to run on an Arduino VENTUNO Q, use Qwen through GenieX as its default local sidecar, cache safe deterministic results, maintain local skills and context, and route requests through GitHub Copilot or Microsoft Foundry. Kare owns a deterministic HydraFusion-inspired tier selector and Lerna-inspired Foundry deployment mapping. It does not claim to run GitHub's native HydraFusion implementation or Lerna itself.
+Kare is an authenticated OpenAI-compatible conduit for coding work. It is intended to run on an Arduino VENTUNO Q, use Qwen through GenieX as a bounded local answer-or-route gate, cache safe route decisions and deterministic results, maintain local skills and context, and escalate requests through GitHub Copilot or Microsoft Foundry. Kare owns a HydraFusion-inspired cascade and Lerna-inspired Foundry deployment mapping. It does not claim to run GitHub's native HydraFusion implementation or Lerna itself.
 
 The project is in the early build stages. The research in `plan.md` still drives the design, and the first service skeleton, inference adapter, device probe, and build tooling now exist.
 
@@ -40,7 +40,7 @@ On the device, protected configuration binds Kare to the trusted LAN and limits 
 ~/.config/kare/copilot-byok.sh
 ```
 
-The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. The OpenAI-compatible `/v1` API still requires the configured bearer key. Kare must support streaming and tool calls for full Copilot CLI compatibility. The current local GenieX route is suitable for basic text validation, but structured local tool calls remain an open limitation.
+The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. The OpenAI-compatible `/v1` API still requires the configured bearer key. Kare advertises one public model, `kare`. Each request follows one bounded policy: cached cloud target, compact tool-free Qwen decision, then ordered cloud escalation. Tool-bearing requests are limited to catalog entries that explicitly support caller-owned tools. Kare does not send Copilot's full tool-heavy request to GenieX.
 
 ## Device iteration
 
@@ -68,7 +68,9 @@ Kare serves the operations dashboard from the device at `http://<device-address>
 
 The dashboard page and dashboard API do not require an API key. They are reachable only from loopback and the CIDR ranges in `Kare:Service:AllowedNetworks`; `NetworkAllowListMiddleware` rejects every other caller before dashboard routing. Keep the device listener and allow-list in protected device configuration. Repository defaults remain loopback-only. The OpenAI-compatible `/v1` API remains bearer-authenticated even for allowed LAN callers.
 
-Dashboard controls can delete individual cache entries or clear the response cache, add and remove skills from absolute device file paths or public HTTPS URLs, add and remove HTTPS wildcard source patterns, and add and probe Streamable HTTP MCP endpoints. Source patterns and URL-backed skills are refreshed every 15 minutes with fixed byte and context limits. Successfully loaded content and enabled skills are added only to local inference. Registry configuration is stored outside the repository under the service account's local application data directory.
+Dashboard controls can delete individual cache entries or clear the response cache, add and remove skills from absolute device file paths or public HTTPS URLs, add and remove HTTPS wildcard source patterns, and add and probe Streamable HTTP MCP endpoints. Source patterns and URL-backed skills are refreshed every 15 minutes with fixed byte and context limits. Successfully loaded content and enabled skills are added to the local Qwen gate. Connected MCP names and advertised capabilities are added as advisory metadata, but Kare does not execute MCP tools or claim that a server was called. Registry configuration is stored outside the repository under the service account's local application data directory.
+
+The response cache remains conservative for generated answers. Copilot requests that stream or carry tools are not answer-cached. The cascade may cache only the selected cloud route ID using a key that includes the current source, skill, and MCP context version, candidate catalog, tool declarations, and compact decision request. It never stores prompt or response text in a cascade-route entry.
 
 
 ## Related projects

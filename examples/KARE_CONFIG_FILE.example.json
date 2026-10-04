@@ -1,5 +1,13 @@
 {
   "Kare": {
+    "Service": {
+      "ModelId": "kare"
+    },
+    "Routing": {
+      "EnableCascadeEscalation": true,
+      "CascadeDecisionMaxInputCharacters": 6000,
+      "CascadeDecisionMaxOutputTokens": 256
+    },
     "Cloud": {
       "CopilotSdk": {
         "Enabled": true,

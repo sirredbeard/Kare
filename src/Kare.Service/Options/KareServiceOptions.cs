@@ -19,7 +19,7 @@ public sealed class KareServiceOptions
     /// </summary>
     [Required]
     [StringLength(128, MinimumLength = 1)]
-    public string ModelId { get; set; } = "kare-local";
+    public string ModelId { get; set; } = "kare";
 
     /// <summary>
     /// Shared secret required in the <c>Authorization: Bearer</c> header for <c>/v1</c>.
