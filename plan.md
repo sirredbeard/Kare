@@ -14,6 +14,7 @@ This document is a plan, not a claim that the design has been proven. The servic
 - [Performance and deployment plan](#performance-and-deployment-plan)
 - [Copilot and cloud routing](#copilot-and-cloud-routing)
 - [Caching and shared knowledge](#caching-and-shared-knowledge)
+- [Operations dashboard](#operations-dashboard)
 - [Persistence and context memory](#persistence-and-context-memory)
 - [Security](#security)
 - [Performance targets](#performance-targets)
@@ -485,6 +486,24 @@ Use `IEmbeddingGenerator`, cache embeddings, preserve source attribution, and qu
 A cache hit should be returned directly only for deterministic, safe requests. For code generation, Kare should consider a local validation step, a stale-context warning, or a short local review before returning a cached patch.
 
 The SLM can recommend cloud escalation, however cache and route safety must be enforced by code. Do not make prompt wording the only control between private source, a stale cache entry, and a billable cloud call.
+
+## Operations dashboard
+
+Kare should expose a small local operations dashboard from the service process. The dashboard is for observing and controlling metadata that Kare already owns. It must not display or persist prompt text, source code, generated responses, credentials, provider tokens, or protected configuration.
+
+The first dashboard surface should show:
+
+- recent route decisions, model IDs, backends, fallback status, success, billable status, first-token latency, total latency, output token counts, and decode rate
+- queue depth, active local inference, approximate utilization, completed request count, and average first-token latency
+- response-cache hashes, creation and last-access times, size, and a delete action
+- registered routing decision URLs and whether each prefers local or cloud work
+- local skills with their paths and modification times
+- configured MCP servers, advertised capabilities, connection state, and last connection time
+- recent route and fallback activity without prompt or response contents
+
+Dashboard state should be bounded and process-local until PostgreSQL persistence is designed. The page and API should remain behind Kare's network allow-list. Dashboard data endpoints should require the configured bearer token. Repository defaults must remain loopback-only and must not contain a development password or API key.
+
+The first implementation may show empty routing URL, skill, and MCP sections until those registries have service-owned data sources. Do not scan arbitrary home directories or copy Copilot settings into Kare to populate them.
 
 ## Persistence and context memory
 

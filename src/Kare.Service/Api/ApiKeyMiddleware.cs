@@ -34,7 +34,11 @@ public sealed class ApiKeyMiddleware
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (!_enabled || !context.Request.Path.StartsWithSegments("/v1"))
+        var protectedPath =
+            context.Request.Path.StartsWithSegments("/v1") ||
+            context.Request.Path.StartsWithSegments("/dashboard/api");
+
+        if (!_enabled || !protectedPath)
         {
             await _next(context).ConfigureAwait(false);
             return;

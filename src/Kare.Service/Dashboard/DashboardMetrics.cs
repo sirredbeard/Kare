@@ -19,8 +19,8 @@ public static class DashboardMetrics
         bool Succeeded,
         double TimeToFirstTokenMs,
         double TotalDurationMs,
-        int OutputTokens,
-        double DecodeTokensPerSecond);
+        long? OutputTokens,
+        double? DecodeTokensPerSecond);
 
     /// <summary>
     /// High-level activity: routing decision, fallback event, or service action.
@@ -81,4 +81,17 @@ public static class DashboardMetrics
         string[] Capabilities,
         bool Connected,
         DateTime LastConnectedAt);
+
+    /// <summary>
+    /// Complete point-in-time dashboard payload.
+    /// </summary>
+    public record Snapshot(
+        DateTime GeneratedAt,
+        IReadOnlyList<RequestMetric> Requests,
+        IReadOnlyList<Activity> Activities,
+        IReadOnlyList<CacheEntry> CacheEntries,
+        WorkloadSnapshot? Workload,
+        IReadOnlyList<RoutingDecisionUrl> RoutingDecisionUrls,
+        IReadOnlyList<SkillInfo> Skills,
+        IReadOnlyList<McpServerInfo> McpServers);
 }

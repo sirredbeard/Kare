@@ -1,4 +1,5 @@
 using Kare.Service.Cache;
+using Kare.Service.Dashboard;
 using Kare.Service.Options;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -42,11 +43,32 @@ public sealed class ResponseCacheTests
         Assert.False(cache.TryGet(messages, options, streaming: false, out _));
     }
 
-    private static ResponseCache CreateCache() =>
+    [Fact]
+    public void DashboardCanInspectAndRemoveCacheMetadata()
+    {
+        var dashboard = new InMemoryMetricsCollector();
+        using var cache = CreateCache(dashboard);
+        var messages = new[] { new ChatMessage(ChatRole.User, "hello") };
+        var options = new ChatOptions { ModelId = "kare-local", Temperature = 0 };
+
+        cache.Set(
+            messages,
+            options,
+            streaming: false,
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "cached")));
+
+        var entry = Assert.Single(dashboard.GetCacheEntries());
+        cache.Remove(entry.Key);
+
+        Assert.Empty(dashboard.GetCacheEntries());
+        Assert.False(cache.TryGet(messages, options, streaming: false, out _));
+    }
+
+    private static ResponseCache CreateCache(IDashboardMetricsCollector? dashboard = null) =>
         new(Options.Create(new ResponseCacheOptions
         {
             Enabled = true,
             MaxEntries = 8,
             EntryLifetimeSeconds = 60,
-        }));
+        }), dashboard);
 }

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Kare.Service.Dashboard;
 using Kare.Service.Options;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Caching.Memory;
@@ -16,12 +17,16 @@ public sealed class ResponseCache : IDisposable
     private const string CacheVersion = "kare-response-v1";
     private readonly ResponseCacheOptions _options;
     private readonly MemoryCache _cache;
+    private readonly IDashboardMetricsCollector? _dashboard;
 
     /// <summary>Creates the cache.</summary>
-    public ResponseCache(IOptions<ResponseCacheOptions> options)
+    public ResponseCache(
+        IOptions<ResponseCacheOptions> options,
+        IDashboardMetricsCollector? dashboard = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value;
+        _dashboard = dashboard;
         _cache = new MemoryCache(new MemoryCacheOptions
         {
             SizeLimit = _options.MaxEntries,
@@ -36,8 +41,24 @@ public sealed class ResponseCache : IDisposable
         out ChatResponse? response)
     {
         response = null;
-        return TryCreateKey(messages, options, streaming, out var key) &&
-               _cache.TryGetValue(key, out response);
+        if (!TryCreateKey(messages, options, streaming, out var key))
+        {
+            return false;
+        }
+
+        if (!_cache.TryGetValue(key, out response))
+        {
+            _dashboard?.RemoveCacheEntry(key);
+            return false;
+        }
+
+        _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
+            key,
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            CountBytes(response!),
+            "application/json"));
+        return true;
     }
 
     /// <summary>Stores an eligible response within configured bounds.</summary>
@@ -64,6 +85,21 @@ public sealed class ResponseCache : IDisposable
                     TimeSpan.FromSeconds(_options.EntryLifetimeSeconds),
                 Size = 1,
             });
+
+        _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
+            key,
+            DateTime.UtcNow,
+            LastAccessedAt: null,
+            CountBytes(response),
+            "application/json"));
+    }
+
+    /// <summary>Removes a cached response by its opaque hash key.</summary>
+    public void Remove(string key)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        _cache.Remove(key);
+        _dashboard?.RemoveCacheEntry(key);
     }
 
     /// <inheritdoc />
@@ -130,6 +166,23 @@ public sealed class ResponseCache : IDisposable
                 if (content is TextContent text)
                 {
                     count += text.Text.Length;
+                }
+            }
+        }
+
+        return count;
+    }
+
+    private static long CountBytes(ChatResponse response)
+    {
+        long count = 0;
+        foreach (var message in response.Messages)
+        {
+            foreach (var content in message.Contents)
+            {
+                if (content is TextContent text)
+                {
+                    count += Encoding.UTF8.GetByteCount(text.Text);
                 }
             }
         }

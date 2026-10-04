@@ -13,6 +13,7 @@ The project is in the early build stages. The research in `plan.md` still drives
 - `src/Kare.Inference.GenieX` - QCS8275 GenieX QAIRT adapter behind `IChatClient`
 - `src/Kare.Inference.OnnxGenAI` - ONNX Runtime GenAI adapter behind `IChatClient`
 - `src/Kare.Service` - OpenAI-compatible HTTP endpoint for Copilot CLI BYOK
+- `/dashboard` - local operations dashboard for routes, latency, workload, cache metadata, skills, and MCP status
 - `bench/Kare.DeviceProbe` - `kare-probe`, the device capability and benchmark tool
 - `build/` - pinned ARM64 build container and publish script
 - `tests/Kare.Tests` - unit tests
@@ -61,6 +62,12 @@ build/device-publish.sh --aot --test
 ```
 
 The JIT and AOT modes deploy to separate versioned release directories and update the same `~/kare/service/current` symlink atomically.
+
+## Operations dashboard
+
+Kare serves a local dashboard at `http://127.0.0.1:5285/dashboard`. It shows recent route decisions, first-token and total latency, decode rate, fallback and billable routes, inference workload, response-cache metadata, routing URLs, local skills, and MCP server state. The dashboard stores metadata only. It does not store prompts or generated responses.
+
+The dashboard API uses the same bearer token as `/v1` when `Kare:Service:ApiKey` is configured. Enter the key in the page. It remains in browser session storage and is not written to the repository. Keep the service loopback-only and use the existing SSH tunnel unless a protected non-loopback configuration has been reviewed.
 
 
 ## Related projects

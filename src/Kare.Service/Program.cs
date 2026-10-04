@@ -28,7 +28,10 @@ if (!string.IsNullOrWhiteSpace(externalConfig))
 }
 
 builder.Services.ConfigureHttpJsonOptions(options =>
-    options.SerializerOptions.TypeInfoResolverChain.Insert(0, OpenAiJsonContext.Default));
+{
+    options.SerializerOptions.TypeInfoResolverChain.Insert(0, DashboardJsonContext.Default);
+    options.SerializerOptions.TypeInfoResolverChain.Insert(0, OpenAiJsonContext.Default);
+});
 
 builder.Services
     .AddOptions<KareServiceOptions>()
@@ -74,10 +77,16 @@ builder.Services
 builder.Services.AddSingleton<IValidateOptions<GenieXOptions>, GenieXOptionsValidator>();
 
 builder.Services.AddSingleton<InferenceGate>();
-builder.Services.AddSingleton<IRouteRecorder, MetricsRouteRecorder>();
+builder.Services.AddSingleton<MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
 builder.Services.AddSingleton<ResponseCache>();
 builder.Services.AddSingleton<IDashboardMetricsCollector, InMemoryMetricsCollector>();
+builder.Services.AddSingleton<IRouteRecorder>(sp =>
+    new DashboardActivity(
+        sp.GetRequiredService<MetricsRouteRecorder>(),
+        sp.GetRequiredService<IDashboardMetricsCollector>(),
+        sp.GetRequiredService<InferenceGate>(),
+        sp.GetRequiredService<IOptions<InferenceLimits>>()));
 builder.Services.AddSingleton<CopilotSdkBackend>();
 builder.Services.AddSingleton<ICloudInferenceBackend>(sp => sp.GetRequiredService<CopilotSdkBackend>());
 builder.Services.AddSingleton<ICloudModelCatalog>(sp => sp.GetRequiredService<CopilotSdkBackend>());

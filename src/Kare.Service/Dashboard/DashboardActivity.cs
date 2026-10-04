@@ -1,5 +1,8 @@
 using Kare.Abstractions;
+using Kare.Core.Inference;
+using Kare.Core.Options;
 using Kare.Core.Routing;
+using Microsoft.Extensions.Options;
 
 namespace Kare.Service.Dashboard;
 
@@ -8,17 +11,30 @@ namespace Kare.Service.Dashboard;
 /// Registers as a singleton that observes all routing decisions and records them for dashboard display.
 /// Runs alongside the existing OpenTelemetry metrics pipeline without modification.
 /// </summary>
-public sealed class DashboardActivity : IRouteRecorder, IDisposable
+public sealed class DashboardActivity : IRouteRecorder
 {
     private readonly IRouteRecorder _inner;
     private readonly IDashboardMetricsCollector _collector;
+    private readonly InferenceGate _gate;
+    private readonly int _maximumConcurrency;
+    private readonly Lock _sync = new();
+    private long _totalRequests;
+    private double _totalTimeToFirstTokenMs;
 
-    public DashboardActivity(IRouteRecorder inner, IDashboardMetricsCollector collector)
+    public DashboardActivity(
+        IRouteRecorder inner,
+        IDashboardMetricsCollector collector,
+        InferenceGate gate,
+        IOptions<InferenceLimits> limits)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(collector);
+        ArgumentNullException.ThrowIfNull(gate);
+        ArgumentNullException.ThrowIfNull(limits);
         _inner = inner;
         _collector = collector;
+        _gate = gate;
+        _maximumConcurrency = limits.Value.MaxConcurrentInference;
     }
 
     /// <summary>
@@ -61,11 +77,19 @@ public sealed class DashboardActivity : IRouteRecorder, IDisposable
         );
 
         _collector.RecordActivity(activity);
-    }
 
-    public void Dispose()
-    {
-        if (_inner is IDisposable d)
-            d.Dispose();
+        lock (_sync)
+        {
+            _totalRequests++;
+            _totalTimeToFirstTokenMs += usage.TimeToFirstToken.TotalMilliseconds;
+
+            var activeRequests = Math.Max(0, _maximumConcurrency - _gate.AvailableSlots);
+            _collector.UpdateWorkload(new DashboardMetrics.WorkloadSnapshot(
+                QueueDepth: _gate.Waiting,
+                ActiveRequests: activeRequests,
+                BusyTimePercent: activeRequests * 100.0 / _maximumConcurrency,
+                TotalRequestsProcessed: _totalRequests,
+                AverageTimeToFirstTokenMs: _totalTimeToFirstTokenMs / _totalRequests));
+        }
     }
 }
