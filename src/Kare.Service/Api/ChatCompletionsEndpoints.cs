@@ -1,7 +1,10 @@
 using System.Text;
 using System.Text.Json;
 using Kare.Abstractions;
+using Kare.Cloud.Copilot;
 using Kare.Core;
+using Kare.Core.Options;
+using Kare.Service.Cache;
 using Kare.Service.Options;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -20,8 +23,6 @@ namespace Kare.Service.Api;
 /// </summary>
 public static class ChatCompletionsEndpoints
 {
-    private static readonly byte[] DoneEvent = "data: [DONE]\n\n"u8.ToArray();
-
     /// <summary>Maps the OpenAI compatible endpoints.</summary>
     public static IEndpointRouteBuilder MapOpenAiCompatibleApi(this IEndpointRouteBuilder builder)
     {
@@ -33,19 +34,71 @@ public static class ChatCompletionsEndpoints
         return builder;
     }
 
-    private static IResult HandleListModels(IOptions<KareServiceOptions> options)
+    private static IResult HandleListModels(
+        IOptions<KareServiceOptions> serviceOptions,
+        IOptions<RoutePolicyOptions> routeOptions,
+        IOptions<CopilotSdkOptions> cloudOptions)
     {
+        var routes = routeOptions.Value;
         var list = new ModelListResponse
         {
             Data =
             [
                 new ModelDescription
                 {
-                    Id = options.Value.ModelId,
+                    Id = routes.LocalModelId,
                     Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 },
             ],
         };
+
+        if (cloudOptions.Value.Enabled)
+        {
+            var configuredModels = cloudOptions.Value.Models;
+            if (configuredModels.Any(model => model.Tier == CloudModelTier.Fast))
+            {
+                list.Data.Add(new ModelDescription
+                {
+                    Id = routes.LightModelId,
+                    Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                });
+            }
+            if (configuredModels.Any(model => model.Tier == CloudModelTier.Heavy))
+            {
+                list.Data.Add(new ModelDescription
+                {
+                    Id = routes.CloudModelId,
+                    Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                });
+            }
+            if (configuredModels.Any(model => model.Tier == CloudModelTier.Complex))
+            {
+                list.Data.Add(new ModelDescription
+                {
+                    Id = routes.ComplexModelId,
+                    Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                });
+            }
+            if (configuredModels.Count > 0)
+            {
+                list.Data.Add(new ModelDescription
+                {
+                    Id = routes.AutomaticModelId,
+                    Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                });
+            }
+        }
+        else if (!string.Equals(
+            serviceOptions.Value.ModelId,
+            routes.LocalModelId,
+            StringComparison.Ordinal))
+        {
+            list.Data.Add(new ModelDescription
+            {
+                Id = serviceOptions.Value.ModelId,
+                Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            });
+        }
 
         return Results.Json(list, OpenAiJsonContext.Default.ModelListResponse);
     }
@@ -54,6 +107,8 @@ public static class ChatCompletionsEndpoints
         HttpContext context,
         IChatClient chatClient,
         IRouteSelector routeSelector,
+        ResponseCache responseCache,
+        IRouteRecorder routeRecorder,
         IOptions<KareServiceOptions> serviceOptions,
         ILoggerFactory loggerFactory)
     {
@@ -82,10 +137,12 @@ public static class ChatCompletionsEndpoints
 
         List<ChatMessage> messages;
         ChatOptions chatOptions;
+        string responseModelId;
         try
         {
             messages = OpenAiTranslator.ToChatMessages(request.Messages);
-            chatOptions = OpenAiTranslator.ToChatOptions(request, modelId);
+            responseModelId = request.Model ?? modelId;
+            chatOptions = OpenAiTranslator.ToChatOptions(request, responseModelId);
         }
         catch (InvalidRequestException ex)
         {
@@ -93,9 +150,51 @@ public static class ChatCompletionsEndpoints
             return;
         }
 
-        var decision = await routeSelector
-            .SelectAsync(messages, chatOptions, context.RequestAborted)
-            .ConfigureAwait(false);
+        if (!request.Stream &&
+            responseCache.TryGet(messages, chatOptions, streaming: false, out var cached))
+        {
+            var cacheDecision = new RouteDecision(
+                KareRoute.Cache,
+                "A validated deterministic in-memory cache entry matched the request.",
+                chatOptions.ModelId ?? modelId,
+                BackendKind.Unknown,
+                IsBillable: false);
+
+            await routeRecorder.RecordAsync(
+                cacheDecision,
+                new RouteUsage(
+                    TimeSpan.Zero,
+                    TimeSpan.Zero,
+                    cached?.Usage?.InputTokenCount,
+                    cached?.Usage?.OutputTokenCount,
+                    Succeeded: true),
+                context.RequestAborted).ConfigureAwait(false);
+
+            await CompleteCachedAsync(
+                context,
+                cached!,
+                "chatcmpl-" + Guid.NewGuid().ToString("N"),
+                responseModelId,
+                cacheDecision).ConfigureAwait(false);
+            return;
+        }
+
+        RouteDecision decision;
+        try
+        {
+            decision = await routeSelector
+                .SelectAsync(messages, chatOptions, context.RequestAborted)
+                .ConfigureAwait(false);
+        }
+        catch (NoBackendAvailableException ex)
+        {
+            await WriteErrorAsync(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                ex.Message,
+                "no_backend").ConfigureAwait(false);
+            return;
+        }
 
         logger.LogInformation(
             "Serving chat completion on route {Route} backend {Backend} billable {Billable} stream {Stream}.",
@@ -110,13 +209,21 @@ public static class ChatCompletionsEndpoints
         {
             if (request.Stream)
             {
-                await StreamAsync(context, chatClient, messages, chatOptions, responseId, modelId, decision)
+                await StreamAsync(context, chatClient, messages, chatOptions, responseId, responseModelId, decision)
                     .ConfigureAwait(false);
             }
             else
             {
-                await CompleteAsync(context, chatClient, messages, chatOptions, responseId, modelId, decision)
+                var response = await CompleteAsync(
+                    context,
+                    chatClient,
+                    messages,
+                    chatOptions,
+                    responseId,
+                    responseModelId,
+                    decision)
                     .ConfigureAwait(false);
+                responseCache.Set(messages, chatOptions, streaming: false, response);
             }
         }
         catch (PromptTooLargeException ex)
@@ -132,13 +239,29 @@ public static class ChatCompletionsEndpoints
         {
             await WriteErrorAsync(context, StatusCodes.Status503ServiceUnavailable, ex.Message, "no_backend").ConfigureAwait(false);
         }
+        catch (UnsupportedBackendCapabilityException ex)
+        {
+            await WriteErrorAsync(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                ex.Message,
+                "unsupported_backend_capability").ConfigureAwait(false);
+        }
+        catch (CloudInferenceException ex)
+        {
+            await WriteErrorAsync(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                ex.Message,
+                "cloud_inference_failed").ConfigureAwait(false);
+        }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
             logger.LogInformation("Client cancelled the request on route {Route}.", decision.Route);
         }
     }
 
-    private static async Task CompleteAsync(
+    private static async Task<ChatResponse> CompleteAsync(
         HttpContext context,
         IChatClient chatClient,
         List<ChatMessage> messages,
@@ -161,6 +284,25 @@ public static class ChatCompletionsEndpoints
             payload,
             OpenAiJsonContext.Default.ChatCompletionResponse,
             context.RequestAborted).ConfigureAwait(false);
+
+        return response;
+    }
+
+    private static Task CompleteCachedAsync(
+        HttpContext context,
+        ChatResponse response,
+        string responseId,
+        string modelId,
+        RouteDecision decision)
+    {
+        var payload = OpenAiTranslator.ToCompletionResponse(response, responseId, modelId, decision);
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        return JsonSerializer.SerializeAsync(
+            context.Response.Body,
+            payload,
+            OpenAiJsonContext.Default.ChatCompletionResponse,
+            context.RequestAborted);
     }
 
     private static async Task StreamAsync(
@@ -245,7 +387,7 @@ public static class ChatCompletionsEndpoints
         };
 
         await WriteEventAsync(context, trailer).ConfigureAwait(false);
-        await context.Response.Body.WriteAsync(DoneEvent, context.RequestAborted).ConfigureAwait(false);
+        await context.Response.WriteAsync("data: [DONE]\n\n", context.RequestAborted).ConfigureAwait(false);
         await context.Response.Body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
     }
 
@@ -287,4 +429,5 @@ public static class ChatCompletionsEndpoints
             OpenAiJsonContext.Default.ErrorResponse,
             context.RequestAborted).ConfigureAwait(false);
     }
+
 }

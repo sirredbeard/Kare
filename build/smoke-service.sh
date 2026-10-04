@@ -39,7 +39,7 @@ completion() {
     local body
     body=$(curl -fsS --max-time 600 "${AUTH[@]}" \
         -H 'Content-Type: application/json' \
-        -d '{"model":"kare","messages":[{"role":"user","content":"Reply with the single word: ready"}],"max_tokens":16,"stream":false}' \
+        -d '{"model":"kare-local","messages":[{"role":"user","content":"Reply with the single word: ready"}],"max_tokens":16,"stream":false}' \
         "$BASE_URL/v1/chat/completions")
     echo "$body"
     echo "$body" | grep -q '"chat.completion"' &&
@@ -50,7 +50,7 @@ streaming() {
     local body
     body=$(curl -fsS --max-time 600 -N "${AUTH[@]}" \
         -H 'Content-Type: application/json' \
-        -d '{"model":"kare","messages":[{"role":"user","content":"Count from one to five."}],"max_tokens":48,"stream":true}' \
+        -d '{"model":"kare-local","messages":[{"role":"user","content":"Count from one to five."}],"max_tokens":48,"stream":true}' \
         "$BASE_URL/v1/chat/completions")
     echo "$body" | tail -5
     echo "$body" | grep -q 'chat.completion.chunk' &&
@@ -62,7 +62,7 @@ rejects_oversized() {
     local status
     status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${AUTH[@]}" \
         -H 'Content-Type: application/json' \
-        -d '{"model":"kare","messages":[]}' \
+        -d '{"model":"kare-local","messages":[]}' \
         "$BASE_URL/v1/chat/completions")
     [[ "$status" == "400" ]]
 }

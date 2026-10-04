@@ -1,6 +1,6 @@
 # Kare plan
 
-Kare should be a fast local service for coding assistance, with a local SLM handling short, common requests and a policy-controlled path to GitHub Copilot or Microsoft Foundry for harder work.
+Kare should be a fast authenticated OpenAI-compatible conduit for coding assistance. Qwen through GenieX is the default local sidecar for bounded passive work such as cache assistance, context preparation, and skill maintenance. Kare owns deterministic tier selection for local, GitHub Copilot, and Microsoft Foundry routes. The design is inspired by the public HydraFusion orchestration patterns and Lerna's provider mapping, but it does not claim to run GitHub's native HydraFusion implementation or Lerna itself.
 
 This document is a plan, not a claim that the design has been proven. The service should not be coded until the device runtime, model quality, Copilot integration point, and cloud accounting have been tested.
 
@@ -94,7 +94,7 @@ These questions are gates in the build plan:
 9. How much context can the board process while keeping first-token latency acceptable?
 10. What is the actual thermal and power behavior during sustained generation?
 
-## Research gate findings, 2026-10-01
+## Research gate findings, updated 2026-10-03
 
 These are the working findings after reviewing the public Qualcomm, Arduino, ONNX Runtime, GitHub Copilot, and Copilot CLI documentation available on 2026-10-01. They are not a replacement for device benchmarks. They are a gate memo to keep the project honest while we prepare the first runtime proof on the VENTUNO Q.
 
@@ -109,7 +109,7 @@ These are the working findings after reviewing the public Qualcomm, Arduino, ONN
 | Copilot CLI transparent interception | Not supported by extensions | Use BYOK for provider redirection |
 | Copilot SDK cloud escalation | Feasible, not transparent | Kare owns route and session correlation |
 | Cache safety | Policy design required | Cache deterministic artifacts first |
-| Context, thermals, and power | Thermals look like a non-issue | Sustained CPU generation peaked at 43.3 C. Context cost is the real limit at about 15 ms per prompt token on CPU |
+| Context, thermals, and power | Context is the active blocker | Sustained CPU generation peaked at 43.3 C. The measured QAIRT bundle is fixed at 4096 tokens, below Copilot CLI's roughly 4.8k-token static prompt |
 
 1. Qualcomm runtime libraries on Ubuntu 24.04.5: yes, packages now exist for the required operating system and architecture. GenieX `0.7.1` publishes Linux ARM64 CLI, SDK, benchmark, and Python assets, and bundles compatible QAIRT libraries by default. `onnxruntime-qnn` `2.6.0` publishes Linux ARM64 inference artifacts for QAIRT `2.50.40`. Installation is no longer the research question. The device proof must verify library loading, FastRPC access, model loading, and inference on the VENTUNO Q image.
 
@@ -131,11 +131,11 @@ These are the working findings after reviewing the public Qualcomm, Arduino, ONN
 
 8. Cache safety: the project should cache only deterministic, policy-safe calls. The right cache keys include model and provider, system instructions, normalized user request, repository identity and revision, relevant file hashes, permission policy, and tokenizer/model version. A response should not be cached only by raw prompt text. For code generation, the cache should be conservative: default to short-lived cache records, repository-hash validation, and stale-context warnings or local revalidation before returning a patch. Do not assume a code answer is safe to reuse just because the prompt text is similar.
 
-9. Available context on the board: this is an unknown that must be measured, not guessed. The board has 16 GB physical memory and roughly 14 GiB usable by the system. Model weights, token cache, service memory, PostgreSQL, and native libraries all compete for that budget. Start at 4K, then measure 8K and 16K with the same prompt and output lengths. Keep raw history, compacted summaries, retrieved source chunks, and the active prompt as separate records. Compaction must preserve decisions, constraints, file and commit identifiers, failed approaches, unresolved questions, and source links. The model's advertised 128K window is not a deployment target for this board.
+9. Available context on the board: the first QAIRT result is closed. The Qwen3 1.7B bundle is compiled for 4096 tokens, and Qualcomm documents that a QAIRT bundle's context cannot be raised at runtime. Sliding window eviction does not help when Copilot CLI's initial static prompt is already larger than the bundle. No larger-context QCS8275 QAIRT bundle was verified in the public catalogue on 2026-10-03. GenieX's GGUF path can raise `--nctx` up to the model's trained maximum, so the next experiment is a small supported GGUF model at 8192 tokens through the llama.cpp HTP path. It must pass the same tool-call, quality, latency, memory, and thermal gates before replacing the QAIRT default.
 
 10. Thermal and power behavior: also unknown until measured. The board has a large heat sink and a power budget that can likely be used aggressively, but the public docs do not give a measured sustained-generation profile for coding models. The first benchmark should run the model for a sustained interval, record first-token latency, steady-state tokens per second, total latency, temperature, throttling, and system power if available, and only then set the real runtime policy. The board should be configured to maximize useful local work, but not by blindly pushing the board until it throttles or fails.
 
-The main conclusion is narrower now: Qualcomm acceleration on QCS8275 is a supported product path, and the fastest proof should use a QCS8275-specific GenieX or AI Hub model. The open work is comparative measurement, an ONNX/QNN C# integration if it still provides value, and the Copilot routing contract. Production coding still waits for the device benchmark.
+The main conclusion is narrower now: Qualcomm acceleration on QCS8275 works, but the measured QAIRT model cannot host Copilot CLI because its compiled context is too small. The next local-client proof is a small GenieX GGUF model with an 8192-token context. The ONNX CPU path remains useful for plain local prompts, but it must reject tool-bearing requests because the current .NET client ignores tools.
 
 ## Technology choices
 
@@ -172,7 +172,7 @@ Kare gateway
 local SLM, GitHub Copilot SDK, or Microsoft Foundry
 ```
 
-HydraFusion through Lerna is a separate native Copilot path until an experimental interceptor proves Kare can sit in front of it without breaking sessions, streaming, cancellation, or usage accounting.
+Native HydraFusion through Lerna remains useful only as a comparison and fallback profile. Kare's supported architecture implements its own bounded routing and provider mapping directly, without requiring a Copilot CLI or Lerna process behind the gateway.
 
 ### Gateway
 
@@ -205,9 +205,9 @@ Both adapters should provide the same `IChatClient` boundary and emit route, mod
 
 ### Cloud adapter
 
-The cloud adapter should call the GitHub Copilot SDK using the user's authenticated Copilot account when the policy allows it. It should preserve the SDK's permission model and usage accounting. SDK provider configuration should remain unset on this route so it does not accidentally bypass GitHub authentication with BYOK.
+The cloud adapter uses one provider-neutral model catalog. GitHub Copilot entries use the signed-in account and leave SDK provider configuration unset. Microsoft Foundry entries use an administrator-configured HTTPS resource endpoint, a separate well-known model ID and wire deployment name, either the Responses or Anthropic Messages wire, and a scoped Entra bearer token. Kare acquires Entra tokens outside the repository and never persists access tokens in its model catalog.
 
-Lerna should remain the existing HydraFusion to Microsoft Foundry interception layer. Kare should not copy Lerna source into this repository or assume it can add model IDs to HydraFusion. The private HydraFusion flags, Lerna mappings, and Lerna auth file were copied to the device on 2026-10-01 and verified without recording their values here.
+Lerna is a reference implementation for provider mapping, wire adaptation, and Cognitive Services token scope. It is not a Kare runtime dependency. Protected Lerna mappings may be transformed into Kare's external catalog for local testing, but Lerna settings, auth state, resource details, deployments, and endpoints must not enter the repository.
 
 ## Model and runtime plan
 
@@ -280,6 +280,8 @@ The board-native path is currently the fastest measured path. On 2026-10-02, the
 
 The release artifact should target `linux-arm64`, carry no .NET runtime requirement, and keep models and Qualcomm libraries outside the main executable. Do not call the deployment a single binary when separate provider libraries are still required.
 
+The host tuning repository must be applied after it is updated. On 2026-10-03 the checked-in service unit correctly ordered itself after `sysfsutils.service`, but the installed copy was older and ran first. `sysfsutils` then reset two of the three CPU policies to `schedutil`. Reapplying the current optimization script fixed the ordering, set all policies to `performance`, masked sleep targets, and added a post-apply governor check. Benchmark preflight must verify live policy values, not only that the service reports success.
+
 ### Managed service
 
 The service should use the ASP.NET Core Native AOT path with:
@@ -343,49 +345,40 @@ The [GitHub Copilot SDK](https://github.com/github/copilot-sdk) exposes the same
 
 The SDK is not automatically a transparent proxy for an existing Copilot TUI session. Kare needs a supported plugin or client integration that can send requests through Kare while preserving the TUI's session behavior.
 
-The SDK route should answer:
+The SDK route now uses `GitHub.Copilot.SDK` `1.0.16` behind a Kare cloud adapter. The adapter:
 
-- Can Kare create a cloud session without provider overrides and preserve GitHub authentication?
-- Does the SDK expose the usage and model metadata needed for route accounting?
-- Can a cloud session return streamed tokens and tool calls to the BYOK client without changing their meaning?
-- Does it preserve tool calls and permissions?
-- Does it work across a network boundary?
-- What happens when Kare is down?
+- starts the runtime in `CopilotClientMode.Empty` so ambient host tools, skills, Git operations, and shared sessions are unavailable
+- uses GitHub `auto` with an explicit Auto V2 tier by default
+- applies a per-request timeout and the SDK's minimum 30-credit session ceiling
+- forwards caller-owned tools as declaration-only tools and returns requested calls without executing them on the board
+- can use GitHub Copilot authentication or direct Microsoft Foundry BYOK
+- deletes the temporary SDK session after each request
+
+A live GitHub Copilot `auto` request returned successfully. A live required-tool request also returned the requested `read_file` function call without executing it. In SDK `1.0.16`, declaration-only tools produced `tool.execution_start` rather than `external_tool.requested`, so Kare intercepts the former for tools it registered. The ARM64 package and device runtime still need validation.
+
+Cloud text streaming now forwards `assistant.message_delta` events as `ChatResponseUpdate` values. A live probe received `STREAM` across three updates. Tool calls terminate the stream with `tool_calls`, and deleting the temporary session stops the SDK run after Kare returns caller-owned work. Cancellation and timeout still need device validation under an active ARM64 request.
 
 GitHub's documented CLI extension API adds tools and slash commands. It does not document a general model-request replacement hook. Treat transparent interception through an extension as experimental work, not the base design.
 
 CLI hooks and SDK hooks can modify the submitted or transformed prompt before the model sees it. This is useful for redaction, policy, route metadata, and cache fingerprints. A prompt hook is not a provider hook and cannot supply the model's streamed response.
 
-### HydraFusion and Lerna
+### Kare-owned orchestration and provider mapping
 
-[HydraFusion](https://github.blog/ai-and-ml/github-copilot/project-hydrafusion-frontier-quality-via-multi-model-orchestration/) is an experimental Copilot orchestration feature. It chooses a workflow such as single-model execution, cascade, or critique. The feature, model IDs, and behavior can change.
+[HydraFusion](https://github.blog/ai-and-ml/github-copilot/project-hydrafusion-frontier-quality-via-multi-model-orchestration/) publicly describes orchestration patterns such as single-model execution, cascade, and critique. GitHub's implementation is experimental and is not exposed as a stable Copilot SDK model or reusable routing library.
 
-[Lerna](https://github.com/sirredbeard/Lerna) intercepts supported HydraFusion model calls and can route selected model IDs to Microsoft Foundry. Lerna currently maps only model IDs that HydraFusion already accepts. It does not add models to HydraFusion.
+[Lerna](https://github.com/sirredbeard/Lerna) demonstrates explicit model-to-provider mapping for supported HydraFusion model IDs. Kare uses the same broad boundary, but performs its own administrator-configured mapping instead of loading Lerna or copied Lerna settings.
 
-The supported routes should be documented separately:
-
-```text
-Copilot CLI BYOK
-  -> Kare
-  -> local SLM or Copilot SDK cloud session
-```
+Kare's supported route is:
 
 ```text
-Copilot CLI native HydraFusion
-  -> Lerna interception
-  -> Microsoft Foundry for mapped models
+OpenAI-compatible client
+  -> Kare authentication, cache, bounds, and deterministic request scoring
+  -> local Qwen/GenieX, a concrete GitHub Copilot model, or a configured Foundry deployment
 ```
 
-The desired combined route remains a research gate:
+The first Kare-owned selector uses request characters, message count, tool declarations, explicit wire model IDs, and configured thresholds. It does not call a model to decide whether to spend credits. The selected concrete provider model replaces the public Kare alias before cloud dispatch, and every response records the actual route and model.
 
-```text
-Copilot CLI native HydraFusion
-  -> experimental interceptor
-  -> Kare cache and policy
-  -> HydraFusion and Lerna
-```
-
-Do not build the combined route until the supported extension lifecycle and request interception API are confirmed from the installed Copilot CLI version.
+This is HydraFusion-inspired routing, not GitHub HydraFusion. The initial implementation performs one provider call. Cascade, critique, ensemble, and retry strategies remain later bounded features and must preserve streaming, cancellation, tool ownership, budgets, and route accounting.
 
 Kare should record:
 
@@ -398,6 +391,16 @@ Kare should record:
 - Estimated billable call avoided or made
 
 Do not claim that a local cache reduces Copilot billing until the Copilot call is actually avoided and the result is verified against the provider's accounting.
+
+Kare exposes five explicit wire model IDs:
+
+- `kare-local` always selects local Qwen through GenieX.
+- `kare-fast` selects a configured low-cost Copilot model from an ordered pool.
+- `kare-copilot` selects the configured heavy Copilot model, which defaults to GitHub `auto`.
+- `kare-complex` selects the configured Microsoft Foundry deployment.
+- `kare-auto` applies deterministic tier selection. Automatic billable escalation remains disabled by default.
+
+The automatic rule uses configured moderate and complex character thresholds plus message and tool counts. Within the moderate pool, larger or tool-bearing requests select progressively stronger configured models. This is an admission and cost policy, not an LLM quality judgment, and the current implementation does not retry a weak answer in another model.
 
 ### Cost policy
 
@@ -449,6 +452,10 @@ Final answer caching should be off by default for agentic and tool-using request
 - File and symbol summaries keyed by content hash
 - Skill and instruction payloads keyed by version
 - Validated command results with short expiration
+
+The first response cache is implemented but disabled by default. It is memory-only, bounded by entry count, lifetime, and response size, and uses versioned SHA-256 keys. It accepts only non-streaming deterministic text requests with no tool declarations or tool history. It does not persist prompts or responses and disappears on restart.
+
+This cache intentionally does not yet cache coding tool flows. Its keys do not include repository revision or file hashes, so enabling it should be limited to context-independent deterministic requests until repository fingerprinting is implemented.
 
 ### Code and skill cache
 
@@ -528,7 +535,9 @@ The design must include:
 - Audit records that do not contain prompt contents
 - Safe behavior when cloud credentials expire
 
-The host's HydraFusion and Lerna settings were copied to the device as a private operational setup. They must never be copied into this Git repository. Rotate credentials if the device is repurposed or the password is reused.
+Non-loopback startup now requires all three of the following: explicit non-loopback enablement, an API key, and at least one allowed CIDR. Loopback remains allowed. LAN HTTP still has no transport confidentiality, so use a trusted private network or an SSH tunnel until HTTPS certificate deployment is configured.
+
+A protected Kare cloud catalog was generated from the host's existing Lerna mappings for device testing. It contains route metadata but no bearer tokens, and it remains outside the repository. The Azure CLI credential cache used for token acquisition is also protected operational state. Rotate or remove both if the device is repurposed.
 
 ## Performance targets
 
@@ -561,18 +570,18 @@ Quality needs human review and automated checks. A faster wrong patch is still w
 
 ## Build stages
 
-Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run. Stage 2 is half done, with the CPU half of the runtime proof closed off-device. Stage 4 has a skeleton that is structurally complete and has never served a real token.
+Progress as of 2026-10-03. The service and both measured backends run on the board. The active gate is finding a local backend that combines enough context, tool calling, acceptable quality, and interactive latency.
 
 | Stage | State | What exists |
 | --- | --- | --- |
 | 0 protect the boundary | Done | Ignore rules, no device detail in the repository, plan reviewed |
-| 1 device inventory | Closed | Ran on the board. 8 cores A78C plus A55, 15 GB, no swap, 34 GB free eMMC, `/dev/fastrpc-cdsp` present and openable, no QAIRT userspace, 48 thermal zones idle at 38.8 C |
-| 2 runtime proof | Closed for first QCS8275 NPU candidate | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed. GenieX v0.7.1 loads the Qualcomm Qwen3 1.7B W4A16 QCS8275 bundle and serves it through QNN/HTP. Kare selects it through `IChatClient` and falls back to ONNX Qwen3 CPU when the sidecar is absent |
-| 3 model selection | First default selected, quality gate open | Qwen3 1.7B is now measured through both GenieX QNN and the .NET ONNX Runtime GenAI NuGet path. GenieX wins prompt processing and decode, so it is the default local runtime. ONNX Qwen3 CPU is the fallback. Both solved only two of five exact coding smoke tasks, so validation and cloud escalation remain required |
-| 4 service skeleton | Serving both local backends on the board | ARM64 Native AOT service selects GenieX QNN first and ONNX Qwen3 CPU as fallback. Native board publish takes 89.36 seconds. Health, models, non-streaming, streaming, usage, cancellation, required tool calls, streamed tool calls, tool results, bounds, and route disclosure passed. Streamed tool-call ordering was verified on the board |
-| 5 cache and shared knowledge | Not started | |
-| 6 Copilot integration | BYOK protocol path ready for CLI test | The endpoint now preserves streaming, required tool calls, streamed tool calls, tool results, cancellation, usage, and route metadata through GenieX. Copilot CLI has not been pointed at it yet |
-| 7 Lerna and Foundry | Not started | |
+| 1 device inventory | Closed, storage pressure increasing | Ran on the board. 8 cores A78C plus A55, 15 GB, no swap, `/dev/fastrpc-cdsp` present and openable, and 48 thermal zones idle at 38.8 C. After staging four model sets, eMMC free space fell to about 11 GB. Add NVMe before expanding the model matrix |
+| 2 runtime proof | Closed for first QCS8275 NPU candidate | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed. GenieX v0.7.1 loads the Qualcomm Qwen3 1.7B W4A16 QCS8275 bundle and serves it through QNN/HTP. Kare now defaults to the validated GenieX sidecar, with ONNX retained only as an explicit CPU fallback |
+| 3 model selection | GGUF conduit candidate passed the passive-local gate | A Qwen3.5 0.8B Q4_0 GGUF model ran through GenieX on the NPU with an 8192-token context. Short text and cache paths work on the board. Tool-call forwarding through Kare still needs fixing; the direct GenieX endpoint can emit tool-call SSE. Representative coding quality, sustained thermals, and full Copilot CLI behavior remain open |
+| 4 service skeleton | Routing and LAN boundary implemented | The service now exposes explicit local, cloud, and automatic model IDs; records actual routes; rejects unsupported ONNX tool calls; enforces API-key plus CIDR requirements for non-loopback binding; and retains bounded inference admission |
+| 5 cache and shared knowledge | Conservative response cache implemented | The opt-in memory cache accepts deterministic non-streaming text-only requests and has bounded size, lifetime, and response length. Repository fingerprints, durable shared knowledge, embeddings, invalidation commands, and cache-quality measurements remain open |
+| 6 Copilot integration | Tiered routing implemented; cloud device validation open | Copilot CLI 1.0.91 reached Kare. Local text, streaming, authentication, and cache behavior pass on the board, but Kare-to-GenieX tool-call translation remains open. GitHub Copilot SDK `auto` returned a live bounded response on x64, cloud text arrived as real deltas, and declaration-only required tools were returned without execution |
+| 7 Kare orchestration and Foundry | Unified catalog and Entra token path implemented; live validation open | Kare selects local, low-cost Copilot, heavy Copilot, or Foundry tiers from explicit aliases and deterministic request shape. A protected external catalog now separates model IDs from wire deployments, supports Responses and Anthropic routes, and uses scoped Azure CLI bearer tokens. Copilot model IDs were checked on the signed-in host account. Live Foundry and ARM64 validation remain open |
 
 ### Stage 0: protect the boundary
 
@@ -605,12 +614,16 @@ Progress as of 2026-10-02. Stage 0 is done. Stage 1 has a tool but no device run
 - Compare quality on coding tasks.
 - Select one default local model and one optional fallback.
 - Record model provenance, license, checksum, quantization, context, and runtime.
+- Test one small GenieX GGUF model at 8192 tokens through llama.cpp HTP. Reject it if tool calls, latency, memory, or quality fail.
 
 ### Stage 4: service skeleton
 
 - Add the .NET 11 service.
 - Add health, authentication, request limits, streaming, cancellation, and structured metrics.
-- Add one local inference adapter.
+- Keep the service as a conduit. The default local sidecar is Qwen through GenieX; ONNX/Phi is an explicit fallback, not the primary route.
+- Keep the local model's passive responsibilities bounded to cache assistance, context preparation, and skill metadata maintenance. It must not execute caller tools or silently escalate requests.
+- Implement only documented HydraFusion-inspired strategies such as bounded single, cascade, and critique flows. Do not claim compatibility with GitHub's private HydraFusion implementation.
+- Treat Lerna as a provider-mapping reference, not a runtime dependency.
 - Do not add cloud routing or a cache until the local path is observable.
 
 Measured on the VENTUNO Q on 2026-10-02:
@@ -627,27 +640,34 @@ runtime                project-local .NET 11 RC on the board
 
 ### Stage 5: cache and shared knowledge
 
-- Add versioned request keys.
-- Add bounded cache storage.
+- Add versioned request keys. Done for the conservative response cache.
+- Add bounded cache storage. Done in memory with entry, lifetime, and response-size limits.
 - Add repository and skill metadata.
 - Add invalidation and deletion.
 - Measure cache hit quality and stale-context failures.
 
 ### Stage 6: Copilot integration
 
-- Point Copilot CLI BYOK at a minimal Kare-compatible endpoint.
+- Point Copilot CLI BYOK at a minimal Kare-compatible endpoint. Done on 2026-10-02 over an SSH local forward, which keeps the loopback binding.
+- Measure Copilot CLI's static context floor before choosing a local default. It was about 4.8k tokens with tool definitions, which rules out the 4096-token GenieX Qwen3 bundle.
+- Keep the ONNX CPU path out of tool-bearing routes. The current .NET client does not support function calling, so Kare returns `unsupported_backend_capability` rather than dropping tools.
+- Test a small GenieX GGUF model at 8192 tokens. QAIRT context is compiled into the bundle and sliding-window eviction cannot fit an oversized initial prompt.
 - Verify streaming, tool calls, cancellation, and offline mode.
-- Add the Copilot SDK cloud route without provider overrides.
-- Preserve permissions, streaming, cancellation, and session behavior.
-- Add explicit local versus cloud policy.
+- Run client-side BYOK tests with an isolated `COPILOT_HOME` so unrelated local plugins cannot change the request.
+- Add the Copilot SDK cloud route. GitHub account routes leave provider configuration unset. Foundry routes use explicit external provider configuration. GitHub `auto` was live-tested on x64.
+- Preserve permissions, streaming, cancellation, and session behavior. Caller tools are declaration-only and are not executed on the board. Cloud text deltas now stream; active-request cancellation still needs board validation.
+- Add explicit local versus cloud policy. Implemented as `kare-local`, `kare-copilot`, and disabled-by-default deterministic `kare-auto`.
 - Test an extension or plugin interceptor only as a separate experimental track.
 
-### Stage 7: Lerna and Foundry
+### Stage 7: Kare orchestration and Foundry
 
-- Validate the existing HydraFusion and Lerna settings on the device.
-- Test each mapped model with a known request.
-- Record route, latency, and usage.
-- Do not put Lerna source or auth files in Kare.
+- Keep the deterministic local, moderate Copilot, heavy Copilot, and complex Foundry tiers explicit.
+- Validate every configured Copilot model against the account before enabling automatic billable routing.
+- Configure each Foundry deployment outside the repository with an HTTPS resource base URL, a well-known model ID, a separate wire deployment name, the Responses or Anthropic Messages wire, and an authentication mode.
+- Prefer scoped Entra bearer tokens. Kare currently obtains Azure access tokens from a protected Azure CLI profile with a bounded command timeout and in-memory reuse by scope. The SDK may ask for a token before each provider request, but `az account get-access-token` runs only on a cold cache or during the two-minute refresh window. Managed identity is a later option if the deployment environment supports it.
+- Test each mapped model with a known request and verify streaming, cancellation, caller-owned tool calls, route metadata, latency, and usage. Keep Foundry tool support disabled in the catalog until those tests pass.
+- Add cascade or critique only as a later bounded strategy with an explicit maximum provider-call count and budget.
+- Do not put Lerna source, settings, or auth files in Kare.
 
 ### Stage 8: AOT release
 
@@ -665,7 +685,8 @@ runtime                project-local .NET 11 RC on the board
 | A model is fast but poor at coding | Bad local suggestions | Use a quality gate and cloud escalation policy |
 | Cache returns stale repository advice | Incorrect code changes | Include revision and file hashes, add invalidation |
 | Copilot CLI has no model transport interception hook | No transparent native provider proxy | Use BYOK for the TUI and the SDK for separate cloud escalation |
-| Copilot CLI BYOK and HydraFusion cannot share one provider path | Local routing cannot transparently retain HydraFusion | Keep documented BYOK and native HydraFusion profiles separate |
+| Copilot CLI BYOK does not retain native HydraFusion | Clients cannot rely on GitHub's private orchestration through Kare | Use Kare-owned bounded routing and keep native HydraFusion only as a separate comparison profile |
+| Protected Azure CLI state expires or is removed | Foundry routes fail authentication | Return an explicit route failure, keep GitHub and local routes available, and require a deliberate device login refresh |
 | Cloud fallback becomes opaque or expensive | Unexpected billing | Require explicit policy and log route/accounting |
 | 16 GB memory is consumed by model plus cache | Swapping or crashes | Use quantized models, cap cache, add NVMe |
 | No swap and sustained load causes instability | Service interruption | Watch memory and temperature, reject work early |

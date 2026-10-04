@@ -16,7 +16,6 @@ public sealed class OnnxGenAiOptions
     /// Directory holding the ONNX Runtime GenAI model. Must contain genai_config.json.
     /// On the VENTUNO Q this should live on NVMe, not eMMC.
     /// </summary>
-    [Required(AllowEmptyStrings = false)]
     public string ModelPath { get; set; } = string.Empty;
 
     /// <summary>

@@ -10,13 +10,15 @@ namespace Kare.Abstractions;
 /// <param name="Backend">The local execution path, or <see cref="BackendKind.Remote"/>.</param>
 /// <param name="IsBillable">True when the route spends Copilot AI credits or Azure credit.</param>
 /// <param name="FellBackFrom">Set when this route replaced a previously selected route.</param>
+/// <param name="ProviderRouteId">Stable provider-neutral catalogue entry used for dispatch.</param>
 public readonly record struct RouteDecision(
     KareRoute Route,
     string Reason,
     string ModelId,
     BackendKind Backend,
     bool IsBillable,
-    KareRoute FellBackFrom = KareRoute.None)
+    KareRoute FellBackFrom = KareRoute.None,
+    string? ProviderRouteId = null)
 {
     /// <summary>True when this decision replaced an earlier route.</summary>
     public bool IsFallback => FellBackFrom != KareRoute.None;

@@ -1,6 +1,6 @@
 # Kare
 
-Kare is a local AI gateway for coding work. It is intended to run on an Arduino VENTUNO Q, serve a responsive local small language model, cache useful context, share skills and code knowledge, and route selected requests through GitHub Copilot or Microsoft Foundry.
+Kare is an authenticated OpenAI-compatible conduit for coding work. It is intended to run on an Arduino VENTUNO Q, use Qwen through GenieX as its default local sidecar, cache safe deterministic results, maintain local skills and context, and route requests through GitHub Copilot or Microsoft Foundry. Kare owns a deterministic HydraFusion-inspired tier selector and Lerna-inspired Foundry deployment mapping. It does not claim to run GitHub's native HydraFusion implementation or Lerna itself.
 
 The project is in the early build stages. The research in `plan.md` still drives the design, and the first service skeleton, inference adapter, device probe, and build tooling now exist.
 
@@ -17,10 +17,17 @@ The project is in the early build stages. The research in `plan.md` still drives
 - `build/` - pinned ARM64 build container and publish script
 - `tests/Kare.Tests` - unit tests
 - `.github/copilot-instructions.md` - instructions for future Copilot sessions
+- `examples/KARE_CONFIG_FILE.example.json` - repository-safe external cloud catalog example
 
 ## Target
 
 The target device is an Arduino VENTUNO Q running Ubuntu 24.04.5 LTS on aarch64. The board has a Qualcomm Dragonwing IQ8 / QCS8275 platform, 16 GB LPDDR5 memory, 64 GB eMMC storage, a Hexagon NPU, an Adreno GPU, and an M.2 NVMe slot.
+
+## Protected configuration
+
+Repository defaults keep cloud routing disabled and define no cloud model catalog. Set `KARE_CONFIG_FILE` to an absolute path for a protected JSON override. The schema is demonstrated in `examples/KARE_CONFIG_FILE.example.json`. Copy it to a protected location, replace the placeholders, and do not commit the copy.
+
+The catalog keeps each public model ID separate from its provider wire deployment. GitHub Copilot routes use the signed-in Copilot account. Microsoft Foundry routes support the Responses and Anthropic Messages wires and may use a scoped Azure CLI bearer token. Kare does not run `az` for every model call. The Copilot SDK can request a token before a provider request, but Kare reuses the in-memory token for its remaining lifetime and invokes `az account get-access-token` only on a cold cache or when the token is within its two-minute refresh window. Keep the configuration file, Azure CLI state, endpoints, deployments, and credentials outside the repository with restrictive permissions.
 
 
 ## Related projects

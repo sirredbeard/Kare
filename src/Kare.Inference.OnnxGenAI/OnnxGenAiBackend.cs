@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Kare.Abstractions;
+using Kare.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -113,15 +114,21 @@ public sealed class OnnxGenAiBackend : ILocalInferenceBackend
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
-        CancellationToken cancellationToken = default) =>
-        _client.Value.GetResponseAsync(messages, options, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfToolsRequested(options);
+        return _client.Value.GetResponseAsync(messages, options, cancellationToken);
+    }
 
     /// <inheritdoc />
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
-        CancellationToken cancellationToken = default) =>
-        _client.Value.GetStreamingResponseAsync(messages, options, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfToolsRequested(options);
+        return _client.Value.GetStreamingResponseAsync(messages, options, cancellationToken);
+    }
 
     /// <inheritdoc />
     public object? GetService(Type serviceType, object? serviceKey = null)
@@ -210,5 +217,15 @@ public sealed class OnnxGenAiBackend : ILocalInferenceBackend
         GenAiExecutionProviderRegistry.EnsureRegistered(
             _options.ExecutionProviderRegistrationName,
             _options.ExecutionProviderLibraryPath);
+    }
+
+    private static void ThrowIfToolsRequested(ChatOptions? options)
+    {
+        if (options?.Tools is { Count: > 0 })
+        {
+            throw new UnsupportedBackendCapabilityException(
+                "tool calling",
+                "The ONNX Runtime GenAI .NET client does not support structured tool calls.");
+        }
     }
 }

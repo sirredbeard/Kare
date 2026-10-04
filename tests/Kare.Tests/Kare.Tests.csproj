@@ -13,8 +13,10 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Kare.Abstractions/Kare.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Kare.Cloud.Copilot/Kare.Cloud.Copilot.csproj" />
     <ProjectReference Include="../../src/Kare.Core/Kare.Core.csproj" />
     <ProjectReference Include="../../src/Kare.Inference.GenieX/Kare.Inference.GenieX.csproj" />
+    <ProjectReference Include="../../src/Kare.Inference.OnnxGenAI/Kare.Inference.OnnxGenAI.csproj" />
     <ProjectReference Include="../../src/Kare.Service/Kare.Service.csproj" />
   </ItemGroup>
 

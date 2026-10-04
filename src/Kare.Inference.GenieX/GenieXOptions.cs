@@ -8,8 +8,12 @@ public sealed class GenieXOptions
     /// <summary>Configuration section name.</summary>
     public const string SectionName = "Kare:Inference:GenieX";
 
-    /// <summary>Whether Kare should probe and select the GenieX backend.</summary>
-    public bool Enabled { get; set; }
+    /// <summary>
+    /// Whether Kare should probe and select the GenieX backend. The service default
+    /// enables this sidecar because the validated local path is Qwen through GenieX;
+    /// ONNX remains an explicit CPU fallback when configured.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
 
     /// <summary>Loopback OpenAI-compatible endpoint exposed by <c>geniex serve</c>.</summary>
     [Required(AllowEmptyStrings = false)]
@@ -20,7 +24,7 @@ public sealed class GenieXOptions
     /// that suffix on requests, so this must be the base model name.
     /// </summary>
     [Required(AllowEmptyStrings = false)]
-    public string ModelId { get; set; } = "qualcomm/qwen3_1_7b";
+    public string ModelId { get; set; } = "unsloth/Qwen3.5-0.8B-GGUF";
 
     /// <summary>Backend preference. This should stay above the CPU fallback.</summary>
     [Range(0, 1000)]

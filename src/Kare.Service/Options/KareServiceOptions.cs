@@ -36,6 +36,12 @@ public sealed class KareServiceOptions
     public bool AllowNonLoopbackBinding { get; set; }
 
     /// <summary>
+    /// CIDR networks allowed to call Kare over a non-loopback listener.
+    /// Loopback is always allowed. Keep this limited to trusted private subnets.
+    /// </summary>
+    public List<string> AllowedNetworks { get; } = [];
+
+    /// <summary>
     /// Maximum request body size in bytes. A second line of defence in front of the
     /// prompt character bound, applied before the body is read.
     /// </summary>

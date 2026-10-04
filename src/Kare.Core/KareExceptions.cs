@@ -80,3 +80,36 @@ public sealed class NoBackendAvailableException : KareException
     {
     }
 }
+
+/// <summary>
+/// The selected backend cannot preserve a requested capability. Kare reports this
+/// instead of silently dropping the request feature and returning an unsafe answer.
+/// </summary>
+public sealed class UnsupportedBackendCapabilityException : KareException
+{
+    /// <summary>Creates the exception.</summary>
+    public UnsupportedBackendCapabilityException(string capability, string detail)
+        : base($"The selected backend does not support {capability}. {detail}")
+    {
+        Capability = capability;
+    }
+
+    /// <summary>The capability the request requires.</summary>
+    public string Capability { get; }
+}
+
+/// <summary>A configured cloud provider failed or exceeded its bounded request policy.</summary>
+public sealed class CloudInferenceException : KareException
+{
+    /// <summary>Creates the exception.</summary>
+    public CloudInferenceException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Creates the exception with the underlying provider failure.</summary>
+    public CloudInferenceException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}

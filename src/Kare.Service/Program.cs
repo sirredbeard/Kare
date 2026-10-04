@@ -1,4 +1,5 @@
 using Kare.Abstractions;
+using Kare.Cloud.Copilot;
 using Kare.Core.Inference;
 using Kare.Core.Options;
 using Kare.Core.Routing;
@@ -6,12 +7,24 @@ using Kare.Inference.GenieX;
 using Kare.Inference.OnnxGenAI;
 using Kare.Service;
 using Kare.Service.Api;
+using Kare.Service.Cache;
 using Kare.Service.Options;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateSlimBuilder(args);
+
+var externalConfig = Environment.GetEnvironmentVariable("KARE_CONFIG_FILE");
+if (!string.IsNullOrWhiteSpace(externalConfig))
+{
+    if (!Path.IsPathRooted(externalConfig))
+    {
+        throw new InvalidOperationException("KARE_CONFIG_FILE must be an absolute path.");
+    }
+
+    builder.Configuration.AddJsonFile(externalConfig, optional: false, reloadOnChange: false);
+}
 
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, OpenAiJsonContext.Default));
@@ -29,6 +42,25 @@ builder.Services
 builder.Services.AddSingleton<IValidateOptions<InferenceLimits>, InferenceLimitsValidator>();
 
 builder.Services
+    .AddOptions<RoutePolicyOptions>()
+    .Bind(builder.Configuration.GetSection(RoutePolicyOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<RoutePolicyOptions>, RoutePolicyOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<RoutePolicyOptions>, RoutePolicySemanticValidator>();
+
+builder.Services
+    .AddOptions<ResponseCacheOptions>()
+    .Bind(builder.Configuration.GetSection(ResponseCacheOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<ResponseCacheOptions>, ResponseCacheOptionsValidator>();
+
+builder.Services
+    .AddOptions<CopilotSdkOptions>()
+    .Bind(builder.Configuration.GetSection(CopilotSdkOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<CopilotSdkOptions>, CopilotSdkOptionsValidator>();
+
+builder.Services
     .AddOptions<OnnxGenAiOptions>()
     .Bind(builder.Configuration.GetSection(OnnxGenAiOptions.SectionName))
     .ValidateOnStart();
@@ -43,6 +75,10 @@ builder.Services.AddSingleton<IValidateOptions<GenieXOptions>, GenieXOptionsVali
 builder.Services.AddSingleton<InferenceGate>();
 builder.Services.AddSingleton<IRouteRecorder, MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
+builder.Services.AddSingleton<ResponseCache>();
+builder.Services.AddSingleton<CopilotSdkBackend>();
+builder.Services.AddSingleton<ICloudInferenceBackend>(sp => sp.GetRequiredService<CopilotSdkBackend>());
+builder.Services.AddSingleton<ICloudModelCatalog>(sp => sp.GetRequiredService<CopilotSdkBackend>());
 
 // The CPU backend is registered unconditionally and at the lowest priority so it stays
 // the fallback. Accelerator backends are added above it once they probe successfully.
@@ -54,7 +90,11 @@ builder.Services.AddSingleton<LocalBackendSelector>();
 builder.Services.AddSingleton<IRouteSelector>(sp =>
 {
     var selected = sp.GetRequiredService<SelectedBackend>();
-    return new LocalOnlyRouteSelector(selected.Kind, selected.ModelId);
+    return new ConfiguredRouteSelector(
+        sp.GetRequiredService<IOptions<RoutePolicyOptions>>(),
+        selected.Kind,
+        selected.ModelId,
+        sp.GetRequiredService<ICloudModelCatalog>());
 });
 
 builder.Services.AddSingleton<IChatClient>(sp =>
@@ -62,23 +102,16 @@ builder.Services.AddSingleton<IChatClient>(sp =>
     var selected = sp.GetRequiredService<SelectedBackend>();
     var gate = sp.GetRequiredService<InferenceGate>();
     var limits = sp.GetRequiredService<IOptions<InferenceLimits>>();
-    var recorder = sp.GetRequiredService<IRouteRecorder>();
-    var selector = sp.GetRequiredService<IRouteSelector>();
-    var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+    IChatClient routing = new KareRoutingChatClient(
+        selected.Backend,
+        sp.GetRequiredService<ICloudInferenceBackend>(),
+        sp.GetRequiredService<IRouteSelector>(),
+        sp.GetRequiredService<IRouteRecorder>(),
+        sp.GetRequiredService<ILoggerFactory>());
 
-    // Bounds sit closest to the model and recording wraps the whole call, so a request
-    // rejected by a bound costs nothing and a served request is always counted.
-    var task = selector.SelectAsync([], null, CancellationToken.None);
-    var decision = task.IsCompletedSuccessfully
-        ? task.Result
-        : task.AsTask().GetAwaiter().GetResult();
-
-    IChatClient bounded = new BoundedChatClient(selected.Backend, gate, limits);
-    return new RouteRecordingChatClient(
-        bounded,
-        decision,
-        recorder,
-        loggerFactory.CreateLogger<RouteRecordingChatClient>());
+    // Bounds wrap both local and cloud routes. A rejected request spends no local
+    // compute and no cloud credits.
+    return new BoundedChatClient(routing, gate, limits);
 });
 
 builder.Services.Configure<KestrelServerOptions>(options =>
@@ -99,6 +132,7 @@ var app = builder.Build();
 var serviceOptions = app.Services.GetRequiredService<IOptions<KareServiceOptions>>().Value;
 GuardBinding(app, serviceOptions);
 
+app.UseMiddleware<NetworkAllowListMiddleware>();
 app.UseMiddleware<ApiKeyMiddleware>();
 app.MapGet("/health", () => Results.Ok("ok"));
 app.MapOpenAiCompatibleApi();
@@ -137,6 +171,12 @@ static void GuardBinding(WebApplication app, KareServiceOptions options)
         {
             throw new InvalidOperationException(
                 "A non-loopback listener requires Kare:Service:ApiKey. Kare will not serve prompts without authentication.");
+        }
+
+        if (options.AllowedNetworks.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "A non-loopback listener requires at least one Kare:Service:AllowedNetworks CIDR.");
         }
     }
 }
