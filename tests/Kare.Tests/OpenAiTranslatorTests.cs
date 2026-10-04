@@ -146,7 +146,7 @@ public sealed class OpenAiTranslatorTests
         var request = Parse(
             """{"messages":[{"role":"user","content":"x"}],"tools":[{"type":"function","function":{"name":"bash"}}]}""");
 
-        var declaration = Assert.IsType<AIFunctionDeclaration>(
+        var declaration = Assert.IsAssignableFrom<AIFunctionDeclaration>(
             Assert.Single(OpenAiTranslator.ToChatOptions(request, "kare-copilot").Tools!));
 
         Assert.Equal("kare_external_bash", declaration.Name);
