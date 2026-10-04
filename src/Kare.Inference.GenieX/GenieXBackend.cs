@@ -1,4 +1,7 @@
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
+using System.ClientModel;
+using System.ClientModel.Primitives;
 using Kare.Abstractions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -60,36 +63,63 @@ public sealed class GenieXBackend : ILocalInferenceBackend
                     _options.ModelId,
                     StringComparison.Ordinal)) == true;
 
-            return found
-                ? BackendProbeResult.Available(
-                    $"GenieX model {_options.ModelId} is available at {_options.Endpoint}.")
-                : BackendProbeResult.Unavailable(
+            if (!found)
+            {
+                return BackendProbeResult.Unavailable(
                     $"GenieX responded, but model {_options.ModelId} is not loaded.");
+            }
+
+            using var readinessResponse = await _probeClient.PostAsJsonAsync(
+                new Uri($"{_options.Endpoint.ToString().TrimEnd('/')}/chat/completions"),
+                new GenieXReadinessRequest
+                {
+                    Model = _options.ModelId,
+                    Messages = [new GenieXReadinessMessage()],
+                    Temperature = 0,
+                    Stream = false,
+                },
+                GenieXJsonContext.Default.GenieXReadinessRequest,
+                timeout.Token).ConfigureAwait(false);
+            readinessResponse.EnsureSuccessStatusCode();
+
+            return BackendProbeResult.Available(
+                $"GenieX model {_options.ModelId} completed a readiness inference at {_options.Endpoint}.");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return BackendProbeResult.Unavailable(
                 $"GenieX probe timed out after {_options.ProbeTimeoutSeconds} seconds.");
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or ClientResultException)
         {
             return BackendProbeResult.Unavailable($"GenieX probe failed: {ex.Message}");
         }
     }
 
     /// <inheritdoc />
-    public Task<ChatResponse> GetResponseAsync(
+    public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
-        CancellationToken cancellationToken = default) =>
-        _client.Value.GetResponseAsync(messages, NormalizeOptions(options), cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await _client.Value
+                .GetResponseAsync(messages, NormalizeOptions(options), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or ClientResultException)
+        {
+            throw BackendUnavailable(ex);
+        }
+    }
 
     /// <inheritdoc />
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default) =>
-        _client.Value.GetStreamingResponseAsync(messages, NormalizeOptions(options), cancellationToken);
+        StreamAsync(messages, NormalizeOptions(options), cancellationToken);
 
     /// <inheritdoc />
     public object? GetService(Type serviceType, object? serviceKey = null)
@@ -120,7 +150,11 @@ public sealed class GenieXBackend : ILocalInferenceBackend
     {
         var openAi = new OpenAIClient(
             new System.ClientModel.ApiKeyCredential("local-geniex"),
-            new OpenAIClientOptions { Endpoint = _options.Endpoint });
+            new OpenAIClientOptions
+            {
+                Endpoint = _options.Endpoint,
+                Transport = new HttpClientPipelineTransport(_probeClient),
+            });
 
         return openAi.GetChatClient(_options.ModelId).AsIChatClient();
     }
@@ -132,6 +166,35 @@ public sealed class GenieXBackend : ILocalInferenceBackend
         options.Temperature ??= 0;
         return options;
     }
+
+    private async IAsyncEnumerable<ChatResponseUpdate> StreamAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions options,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var stream = _client.Value.GetStreamingResponseAsync(messages, options, cancellationToken);
+        await using var enumerator = stream.GetAsyncEnumerator(cancellationToken);
+        while (await MoveNextAsync(enumerator).ConfigureAwait(false))
+        {
+            yield return enumerator.Current;
+        }
+    }
+
+    private async ValueTask<bool> MoveNextAsync(
+        IAsyncEnumerator<ChatResponseUpdate> enumerator)
+    {
+        try
+        {
+            return await enumerator.MoveNextAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or ClientResultException)
+        {
+            throw BackendUnavailable(ex);
+        }
+    }
+
+    private LocalInferenceException BackendUnavailable(Exception exception) =>
+        new($"GenieX request failed for model {_options.ModelId}: {exception.Message}", exception);
 
     private static string RemovePrecision(string modelId)
     {

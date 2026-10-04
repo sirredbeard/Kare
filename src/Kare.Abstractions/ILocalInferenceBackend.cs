@@ -40,3 +40,13 @@ public readonly record struct BackendProbeResult(bool IsAvailable, string Detail
     /// <summary>Creates an unavailable result.</summary>
     public static BackendProbeResult Unavailable(string detail) => new(false, detail);
 }
+
+/// <summary>A selected local backend failed while serving a request.</summary>
+public sealed class LocalInferenceException : Exception
+{
+    /// <summary>Creates the exception with the underlying provider failure.</summary>
+    public LocalInferenceException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}

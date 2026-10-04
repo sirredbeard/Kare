@@ -239,6 +239,14 @@ public static class ChatCompletionsEndpoints
         {
             await WriteErrorAsync(context, StatusCodes.Status503ServiceUnavailable, ex.Message, "no_backend").ConfigureAwait(false);
         }
+        catch (LocalInferenceException ex)
+        {
+            await WriteErrorAsync(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                ex.Message,
+                "local_inference_failed").ConfigureAwait(false);
+        }
         catch (UnsupportedBackendCapabilityException ex)
         {
             await WriteErrorAsync(

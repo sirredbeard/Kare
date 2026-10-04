@@ -101,3 +101,9 @@ The GitHub Copilot SDK `1.0.16` adapter passed a live GitHub `auto` request with
 Cloud caller-tool forwarding also passed. Kare registers caller tools as declaration-only tools. SDK `1.0.16` did not emit `external_tool.requested` in this test; it emitted the complete call at `tool.execution_start` and then attempted to resolve the declaration itself. Kare now intercepts `tool.execution_start` only for the caller tools it registered and returns the function name, call ID, and arguments without executing the tool on the gateway.
 
 Cloud text streaming now forwards SDK `assistant.message_delta` events. A live probe returned `STREAM` across three response updates. ARM64 Native AOT packaging and live board execution of the bundled Copilot runtime remain deployment gates.
+
+## Incident, 2026-10-04
+
+GenieX returned HTTP 500 after `/v1/models` had passed. The model load failed with `ggml-hex: failed to open session`. Kare let the OpenAI client's `ClientResultException` escape, Kestrel aborted the request, and Copilot CLI reported a failed native-model HTTP fetch.
+
+The GenieX probe now runs a one-token inference instead of treating the model listing as proof of readiness. Runtime GenieX HTTP failures are translated to a structured `503 local_inference_failed` response before a stream starts. Kare still does not silently reroute a local request to a billable cloud model.
