@@ -80,22 +80,7 @@ Qualcomm's current GenieX platform table explicitly maps Dragonwing IQ-8275, `QC
 
 Arduino and Qualcomm also document GenieX for local language and vision-language models on the VENTUNO Q. GenieX is a separate runtime from ONNX Runtime GenAI. GenieX `0.7.1` provides Linux ARM64 CLI, Python, C SDK, Docker, benchmark, and OpenAI-compatible server assets. It is still marked Developer Preview, so Kare should pin the version and keep it behind an adapter or process boundary.
 
-## What is still unknown
-
-These questions are gates in the build plan:
-
-1. Can the required Qualcomm runtime libraries be installed and used on Ubuntu 24.04.5 on this board?
-2. Does the available QNN or QAIRT release support the exact QCS8275 and HTP architecture?
-3. Can the chosen ONNX model be compiled for the HTP backend without unsupported operators or unacceptable CPU fallbacks?
-4. Does ONNX Runtime GenAI have a supported .NET 11 ARM64 package, or must Kare build and load native libraries itself?
-5. Does GenieX expose a stable local API suitable for a long-running service, or only a command-line workflow?
-6. Which Copilot CLI extension lifecycle can intercept or redirect calls before the model request is sent?
-7. Can the GitHub Copilot SDK preserve streaming, cancellation, permissions, tool calls, and session identity through Kare?
-8. Which calls can be cached without returning stale or unsafe code?
-9. How much context can the board process while keeping first-token latency acceptable?
-10. What is the actual thermal and power behavior during sustained generation?
-
-## Research gate findings, updated 2026-10-03
+## Research findings
 
 These are the working findings after reviewing the public Qualcomm, Arduino, ONNX Runtime, GitHub Copilot, and Copilot CLI documentation available on 2026-10-01. They are not a replacement for device benchmarks. They are a gate memo to keep the project honest while we prepare the first runtime proof on the VENTUNO Q.
 
