@@ -29,6 +29,17 @@ Repository defaults keep cloud routing disabled and define no cloud model catalo
 
 The catalog keeps each public model ID separate from its provider wire deployment. GitHub Copilot routes use the signed-in Copilot account. Microsoft Foundry routes support the Responses and Anthropic Messages wires and may use a scoped Azure CLI bearer token. Kare does not run `az` for every model call. The Copilot SDK can request a token before a provider request, but Kare reuses the in-memory token for its remaining lifetime and invokes `az account get-access-token` only on a cold cache or when the token is within its two-minute refresh window. Keep the configuration file, Azure CLI state, endpoints, deployments, and credentials outside the repository with restrictive permissions.
 
+## Host Copilot CLI through Kare
+
+When Kare is loopback-only on the device, open the protected SSH tunnel with `build/tunnel.sh`. The host launcher at `~/.config/kare/copilot-byok.sh` then exports the documented Copilot CLI OpenAI-compatible provider variables and starts Copilot without changing the host's normal Copilot or Lerna settings:
+
+```bash
+build/tunnel.sh
+~/.config/kare/copilot-byok.sh
+```
+
+The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. Kare must support streaming and tool calls for full Copilot CLI compatibility. The current local GenieX route is suitable for basic text validation, but structured local tool calls remain an open limitation.
+
 
 ## Related projects
 
