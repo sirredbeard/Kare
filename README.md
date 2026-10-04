@@ -34,14 +34,13 @@ Refresh the catalog from the account, not from the public model list alone. Use 
 
 ## Host Copilot CLI through Kare
 
-When Kare is loopback-only on the device, open the protected SSH tunnel with `build/tunnel.sh`. The host launcher at `~/.config/kare/copilot-byok.sh` then exports the documented Copilot CLI OpenAI-compatible provider variables and starts Copilot without changing the host's normal Copilot or Lerna settings:
+On the device, protected configuration binds Kare to the trusted LAN and limits callers with an explicit CIDR allow-list. The host launcher at `~/.config/kare/copilot-byok.sh` points directly at the device, exports the documented Copilot CLI OpenAI-compatible provider variables, and starts Copilot without changing the host's normal Copilot or Lerna settings:
 
 ```bash
-build/tunnel.sh
 ~/.config/kare/copilot-byok.sh
 ```
 
-The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. Kare must support streaming and tool calls for full Copilot CLI compatibility. The current local GenieX route is suitable for basic text validation, but structured local tool calls remain an open limitation.
+The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. The OpenAI-compatible `/v1` API still requires the configured bearer key. Kare must support streaming and tool calls for full Copilot CLI compatibility. The current local GenieX route is suitable for basic text validation, but structured local tool calls remain an open limitation.
 
 ## Device iteration
 
@@ -65,11 +64,11 @@ The JIT and AOT modes deploy to separate versioned release directories and updat
 
 ## Operations dashboard
 
-Kare serves a local dashboard at `http://127.0.0.1:5285/dashboard`. It shows recent route decisions, first-token and total latency, decode rate, fallback and billable routes, per-model token usage, configured local and cloud endpoints, inference workload, response-cache metadata, authoritative web sources, local skills, and MCP server state. The dashboard stores metadata only. It does not store prompts or generated responses.
+Kare serves the operations dashboard from the device at `http://<device-address>:5285/dashboard`. It shows recent route decisions, first-token and total latency, decode rate, fallback and billable routes, a pie chart of request distribution across configured model endpoints, per-model token usage, inference workload, response-cache metadata, authoritative web sources, skills, and MCP server state. The dashboard stores metadata only. It does not store prompts or generated responses.
 
-The dashboard API uses the same API key as `/v1` when `Kare:Service:ApiKey` is configured. Access through the SSH tunnel receives a process-local HttpOnly dashboard session automatically because the device sees an authenticated loopback connection. Direct LAN access requires the key once, then replaces it with an HttpOnly session cookie. The API key is never embedded in the page or stored in browser JavaScript storage.
+The dashboard page and dashboard API do not require an API key. They are reachable only from loopback and the CIDR ranges in `Kare:Service:AllowedNetworks`; `NetworkAllowListMiddleware` rejects every other caller before dashboard routing. Keep the device listener and allow-list in protected device configuration. Repository defaults remain loopback-only. The OpenAI-compatible `/v1` API remains bearer-authenticated even for allowed LAN callers.
 
-Dashboard controls can delete individual cache entries or clear the response cache, add and remove explicit skill files, add and remove HTTPS wildcard source patterns, and add and probe Streamable HTTP MCP endpoints. Source patterns are crawled every 15 minutes with fixed page and content limits. Successfully crawled content and enabled skill files are added only to local inference. Registry configuration is stored outside the repository under the service account's local application data directory.
+Dashboard controls can delete individual cache entries or clear the response cache, add and remove skills from absolute device file paths or public HTTPS URLs, add and remove HTTPS wildcard source patterns, and add and probe Streamable HTTP MCP endpoints. Source patterns and URL-backed skills are refreshed every 15 minutes with fixed byte and context limits. Successfully loaded content and enabled skills are added only to local inference. Registry configuration is stored outside the repository under the service account's local application data directory.
 
 
 ## Related projects

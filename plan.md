@@ -483,12 +483,13 @@ The first dashboard surface should show:
 - response-cache hashes, creation and last-access times, size, and a delete action
 - registered routing decision URLs and whether each prefers local or cloud work
 - local skills with their paths and modification times
+- a visual request breakdown across configured local, Copilot, and Foundry model endpoints
 - configured MCP servers, advertised capabilities, connection state, and last connection time
 - recent route and fallback activity without prompt or response contents
 
-Dashboard state should be bounded and process-local until PostgreSQL persistence is designed. The page and API should remain behind Kare's network allow-list. Dashboard data endpoints should require the configured bearer token. Repository defaults must remain loopback-only and must not contain a development password or API key.
+Dashboard state should be bounded and process-local until PostgreSQL persistence is designed. The page and API remain behind Kare's explicit CIDR network allow-list but do not require a bearer token on the trusted LAN. The OpenAI-compatible API remains bearer-authenticated. Repository defaults must remain loopback-only and must not contain a development password, device subnet, or API key.
 
-Kare now owns bounded registries for authoritative HTTPS source patterns, explicit local skill files, and Streamable HTTP MCP endpoints. Source patterns are periodically crawled with fixed page, byte, and injected-context limits. Enabled source and skill content is added only to local inference. MCP status comes from Kare's own initialize probes. Kare does not scan arbitrary home directories or copy Copilot settings to populate these registries.
+Kare now owns bounded registries for authoritative HTTPS source patterns, skills loaded from explicit absolute device paths or public HTTPS URLs, and Streamable HTTP MCP endpoints. Source patterns and remote skills are periodically refreshed with fixed page, byte, and injected-context limits. Enabled source and skill content is added only to local inference. MCP status comes from Kare's own initialize probes. Kare does not scan arbitrary home directories or copy Copilot settings to populate these registries.
 
 ## Persistence and context memory
 

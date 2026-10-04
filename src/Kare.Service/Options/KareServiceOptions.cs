@@ -22,7 +22,7 @@ public sealed class KareServiceOptions
     public string ModelId { get; set; } = "kare-local";
 
     /// <summary>
-    /// Shared secret required in the <c>Authorization: Bearer</c> header.
+    /// Shared secret required in the <c>Authorization: Bearer</c> header for <c>/v1</c>.
     /// Leave empty only when the listener is bound to loopback. Kare refuses to start
     /// with an empty key once <see cref="AllowNonLoopbackBinding"/> is set.
     /// </summary>

@@ -1,24 +1,14 @@
-@baseUrl = http://127.0.0.1:5285
+@baseUrl = http://device-hostname-or-address:5285
 @apiKey = replace-with-protected-api-key
 
 ### Health
 GET {{baseUrl}}/health
 
-### Dashboard login
-POST {{baseUrl}}/dashboard/api/session
-Content-Type: application/json
-
-{
-  "apiKey": "{{apiKey}}"
-}
-
-### Dashboard snapshot
+### Dashboard snapshot, allowed LAN only
 GET {{baseUrl}}/dashboard/api/snapshot
-Authorization: Bearer {{apiKey}}
 
 ### Add an authoritative source
 POST {{baseUrl}}/dashboard/api/sources
-Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -26,9 +16,8 @@ Content-Type: application/json
   "enabled": true
 }
 
-### Add an explicit skill
+### Add an explicit local-file skill
 POST {{baseUrl}}/dashboard/api/skills
-Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -38,9 +27,19 @@ Content-Type: application/json
   "enabled": true
 }
 
+### Add an HTTPS skill
+POST {{baseUrl}}/dashboard/api/skills
+Content-Type: application/json
+
+{
+  "name": "remote-example",
+  "path": "https://example.com/SKILL.md",
+  "description": "Example remote skill",
+  "enabled": true
+}
+
 ### Add and probe a Streamable HTTP MCP server
 POST {{baseUrl}}/dashboard/api/mcp-servers
-Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -50,4 +49,7 @@ Content-Type: application/json
 
 ### Clear response cache
 DELETE {{baseUrl}}/dashboard/api/cache
+
+### List advertised OpenAI models
+GET {{baseUrl}}/v1/models
 Authorization: Bearer {{apiKey}}

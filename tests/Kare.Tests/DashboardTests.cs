@@ -8,6 +8,9 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using Xunit;
 
 namespace Kare.Tests;
@@ -76,10 +79,8 @@ public sealed class DashboardTests
         Assert.NotNull(entry.LastAccessedAt);
     }
 
-    [Theory]
-    [InlineData("/v1/models")]
-    [InlineData("/dashboard/api/snapshot")]
-    public async Task ApiKeyProtectsModelAndDashboardData(string path)
+    [Fact]
+    public async Task ApiKeyProtectsModelDataEvenForLanCaller()
     {
         var nextCalled = false;
         var middleware = new ApiKeyMiddleware(
@@ -88,10 +89,10 @@ public sealed class DashboardTests
                 nextCalled = true;
                 return Task.CompletedTask;
             },
-            Options.Create(new KareServiceOptions { ApiKey = "secret" }),
-            CreateAuthentication());
+            Options.Create(new KareServiceOptions { ApiKey = "secret" }));
         var context = new DefaultHttpContext();
-        context.Request.Path = path;
+        context.Connection.RemoteIpAddress = IPAddress.Parse("192.168.0.25");
+        context.Request.Path = "/v1/models";
 
         await middleware.InvokeAsync(context);
 
@@ -100,22 +101,23 @@ public sealed class DashboardTests
     }
 
     [Fact]
-    public void DashboardSessionUsesHttpOnlyCookieWithoutExposingApiKey()
+    public async Task DashboardDataDoesNotRequireApiKeyAfterNetworkAllowList()
     {
-        var authentication = CreateAuthentication();
-        var loginContext = new DefaultHttpContext();
+        var nextCalled = false;
+        var middleware = new ApiKeyMiddleware(
+            _ =>
+            {
+                nextCalled = true;
+                return Task.CompletedTask;
+            },
+            Options.Create(new KareServiceOptions { ApiKey = "secret" }));
+        var context = new DefaultHttpContext();
+        context.Connection.RemoteIpAddress = IPAddress.Parse("192.168.0.25");
+        context.Request.Path = "/dashboard/api/snapshot";
 
-        Assert.True(authentication.IsApiKeyValid("secret"));
-        authentication.EstablishSession(loginContext);
+        await middleware.InvokeAsync(context);
 
-        var setCookie = Assert.Single(loginContext.Response.Headers.SetCookie);
-        Assert.NotNull(setCookie);
-        Assert.Contains("httponly", setCookie, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("secret", setCookie, StringComparison.Ordinal);
-
-        var requestContext = new DefaultHttpContext();
-        requestContext.Request.Headers.Cookie = setCookie.Split(';', 2)[0];
-        Assert.True(authentication.IsAuthorized(requestContext));
+        Assert.True(nextCalled);
     }
 
     [Fact]
@@ -188,6 +190,53 @@ public sealed class DashboardTests
         }
     }
 
+    [Fact]
+    public async Task EnabledHttpsSkillIsFetchedAndInjectedIntoLocalContext()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new StaticResponseHandler(
+            "Use the remote measured runtime.",
+            "text/markdown"));
+
+        try
+        {
+            var service = new DashboardKnowledgeService(
+                new InMemoryMetricsCollector(),
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            var skill = await service.AddSkillAsync(
+                new CreateDashboardSkillRequest(
+                    "remote-runtime",
+                    "https://1.1.1.1/SKILL.md",
+                    "Remote runtime rule",
+                    Enabled: true),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("ready", skill.Status);
+            var enriched = await service.AddLocalContextAsync(
+                [new ChatMessage(ChatRole.User, "Which runtime should I use?")],
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(2, enriched.Count);
+            Assert.Contains(
+                "Use the remote measured runtime.",
+                enriched[0].Contents.OfType<TextContent>().Single().Text,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            Directory.Delete(directory);
+        }
+    }
+
     private static DashboardMetrics.RequestMetric CreateRequest(
         long inputTokens,
         long outputTokens,
@@ -208,9 +257,6 @@ public sealed class DashboardTests
             OutputTokens: outputTokens,
             DecodeTokensPerSecond: 4);
 
-    private static DashboardAuthenticationService CreateAuthentication() =>
-        new(Options.Create(new KareServiceOptions { ApiKey = "secret" }));
-
     private sealed class CapturingRouteRecorder : IRouteRecorder
     {
         public ValueTask RecordAsync(
@@ -220,8 +266,19 @@ public sealed class DashboardTests
             ValueTask.CompletedTask;
     }
 
-    private sealed class StaticHttpClientFactory : IHttpClientFactory
+    private sealed class StaticHttpClientFactory(HttpClient? client = null) : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new();
+        public HttpClient CreateClient(string name) => client ?? new();
+    }
+
+    private sealed class StaticResponseHandler(string content, string mediaType) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content, Encoding.UTF8, mediaType),
+            });
     }
 }

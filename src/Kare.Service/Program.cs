@@ -81,7 +81,6 @@ builder.Services.AddSingleton<MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
 builder.Services.AddSingleton<ResponseCache>();
 builder.Services.AddSingleton<IDashboardMetricsCollector, InMemoryMetricsCollector>();
-builder.Services.AddSingleton<IDashboardAuthenticationService, DashboardAuthenticationService>();
 builder.Services.AddSingleton<IModelEndpointProvider, ModelEndpointProvider>();
 builder.Services.AddSingleton<DashboardKnowledgeService>();
 builder.Services.AddSingleton<IDashboardKnowledgeService>(

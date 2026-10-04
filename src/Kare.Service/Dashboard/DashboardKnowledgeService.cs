@@ -37,7 +37,7 @@ public interface IDashboardKnowledgeService
 /// <summary>Payload for registering an authoritative URL pattern.</summary>
 public sealed record CreateAuthoritativeSourceRequest(string Pattern, bool Enabled = true);
 
-/// <summary>Payload for registering an explicit local skill file.</summary>
+/// <summary>Payload for registering an explicit local skill file or public HTTPS URL.</summary>
 public sealed record CreateDashboardSkillRequest(
     string Name,
     string Path,
@@ -70,6 +70,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     private readonly Dictionary<string, SkillRegistration> _skills = new(StringComparer.Ordinal);
     private readonly Dictionary<string, McpRegistration> _mcpServers = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _sourceContent = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RemoteSkillContent> _remoteSkillContent = new(StringComparer.Ordinal);
     private long _contextVersion;
 
     public string ContextVersion =>
@@ -171,18 +172,27 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Path))
         {
-            throw new ArgumentException("Skill name and path are required.");
+            throw new ArgumentException("Skill name and file path or URL are required.");
         }
 
-        if (!Path.IsPathRooted(request.Path))
+        var location = request.Path.Trim();
+        var isRemote = TryGetRemoteSkillUri(location, out var remoteUri);
+        if (isRemote)
         {
-            throw new ArgumentException("Skill path must be absolute.");
+            location = remoteUri.AbsoluteUri;
+        }
+        else if (Path.IsPathRooted(location))
+        {
+            location = Path.GetFullPath(location);
+        }
+        else
+        {
+            throw new ArgumentException("Skill location must be an absolute file path or public HTTPS URL.");
         }
 
-        var fullPath = Path.GetFullPath(request.Path);
         var registration = new SkillRegistration(
             request.Name.Trim(),
-            fullPath,
+            location,
             request.Description.Trim(),
             request.Enabled);
 
@@ -197,9 +207,16 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         }
         Interlocked.Increment(ref _contextVersion);
 
+        await PersistAsync(cancellationToken).ConfigureAwait(false);
+
+        if (isRemote && registration.Enabled)
+        {
+            return await RefreshRemoteSkillAsync(registration, remoteUri, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var metric = InspectSkill(registration);
         _collector.RegisterSkill(metric);
-        await PersistAsync(cancellationToken).ConfigureAwait(false);
         return metric;
     }
 
@@ -210,6 +227,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         lock (_sync)
         {
             removed = _skills.Remove(name);
+            _remoteSkillContent.Remove(name);
         }
 
         if (removed)
@@ -303,10 +321,25 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 continue;
             }
 
-            var skillContent = await File.ReadAllTextAsync(skill.Path, cancellationToken).ConfigureAwait(false);
+            string skillContent;
+            if (TryGetRemoteSkillUri(skill.Path, out _))
+            {
+                lock (_sync)
+                {
+                    skillContent = _remoteSkillContent[skill.Name].Content;
+                }
+            }
+            else
+            {
+                skillContent = await ReadBoundedFileAsync(
+                    skill.Path,
+                    MaxSkillBytes,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             AppendBounded(
                 contentBuffer,
-                $"\nSkill: {skill.Name}\nPath: {skill.Path}\n{skillContent}\n",
+                $"\nSkill: {skill.Name}\nLocation: {skill.Path}\n{skillContent}\n",
                 MaxInjectedCharacters);
         }
 
@@ -358,7 +391,14 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
         foreach (var skill in skills)
         {
-            _collector.RegisterSkill(InspectSkill(skill));
+            if (skill.Enabled && TryGetRemoteSkillUri(skill.Path, out var remoteUri))
+            {
+                await RefreshRemoteSkillAsync(skill, remoteUri, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                _collector.RegisterSkill(InspectSkill(skill));
+            }
         }
         if (skills.Length > 0)
         {
@@ -407,7 +447,10 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                     continue;
                 }
 
-                var body = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
+                var body = await ReadBoundedAsync(
+                    response.Content,
+                    MaxPageBytes,
+                    cancellationToken).ConfigureAwait(false);
                 content.AppendLine($"\nSource URL: {uri}");
                 content.AppendLine(ToPlainText(body));
 
@@ -491,7 +534,10 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
             using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            var body = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            var body = await ReadBoundedAsync(
+                response.Content,
+                MaxPageBytes,
+                cancellationToken).ConfigureAwait(false);
             if (string.Equals(
                     response.Content.Headers.ContentType?.MediaType,
                     "text/event-stream",
@@ -637,8 +683,26 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             source.Enabled ? "pending" : "disabled",
             Error: null);
 
-    private static DashboardMetrics.SkillInfo InspectSkill(SkillRegistration skill)
+    private DashboardMetrics.SkillInfo InspectSkill(SkillRegistration skill)
     {
+        if (TryGetRemoteSkillUri(skill.Path, out _))
+        {
+            RemoteSkillContent? content;
+            lock (_sync)
+            {
+                _remoteSkillContent.TryGetValue(skill.Name, out content);
+            }
+
+            return new DashboardMetrics.SkillInfo(
+                skill.Name,
+                skill.Path,
+                skill.Description,
+                skill.Enabled,
+                content?.SizeBytes ?? 0,
+                content?.FetchedAt ?? DateTime.MinValue,
+                !skill.Enabled ? "disabled" : content is null ? "pending" : "ready");
+        }
+
         var file = new FileInfo(skill.Path);
         return new DashboardMetrics.SkillInfo(
             skill.Name,
@@ -652,6 +716,68 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 : file.Length > MaxSkillBytes
                     ? "too-large"
                     : "ready");
+    }
+
+    private async Task<DashboardMetrics.SkillInfo> RefreshRemoteSkillAsync(
+        SkillRegistration skill,
+        Uri uri,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ValidatePublicAddressAsync(uri, cancellationToken).ConfigureAwait(false);
+            using var response = await _httpClient
+                .GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+
+            var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+            if (!mediaType.StartsWith("text/", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Remote skills must return text or JSON content.");
+            }
+
+            var body = await ReadBoundedAsync(
+                response.Content,
+                MaxSkillBytes,
+                cancellationToken).ConfigureAwait(false);
+            var content = string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase)
+                ? ToPlainText(body)
+                : body;
+            var fetched = new RemoteSkillContent(
+                content,
+                Encoding.UTF8.GetByteCount(content),
+                DateTime.UtcNow);
+
+            bool changed;
+            lock (_sync)
+            {
+                changed = !_remoteSkillContent.TryGetValue(skill.Name, out var previous) ||
+                    !string.Equals(previous.Content, fetched.Content, StringComparison.Ordinal);
+                _remoteSkillContent[skill.Name] = fetched;
+            }
+
+            if (changed)
+            {
+                Interlocked.Increment(ref _contextVersion);
+            }
+
+            var metric = InspectSkill(skill);
+            _collector.RegisterSkill(metric);
+            return metric;
+        }
+        catch (Exception ex) when (
+            !cancellationToken.IsCancellationRequested &&
+            ex is HttpRequestException or IOException or InvalidOperationException or
+                System.Net.Sockets.SocketException)
+        {
+            _logger.LogWarning(ex, "Remote skill refresh failed for skill {SkillName}.", skill.Name);
+            var current = InspectSkill(skill);
+            var metric = current with { Status = "failed" };
+            _collector.RegisterSkill(metric);
+            return metric;
+        }
     }
 
     private static void ValidateSourcePattern(string pattern)
@@ -715,17 +841,42 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
     private static async Task<string> ReadBoundedAsync(
         HttpContent content,
+        int maximumBytes,
         CancellationToken cancellationToken)
     {
-        if (content.Headers.ContentLength is > MaxPageBytes)
+        if (content.Headers.ContentLength is > 0 &&
+            content.Headers.ContentLength > maximumBytes)
         {
-            throw new InvalidOperationException($"Source page exceeds {MaxPageBytes} bytes.");
+            throw new InvalidOperationException($"Content exceeds {maximumBytes} bytes.");
         }
 
         await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        return await ReadBoundedStreamAsync(stream, maximumBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<string> ReadBoundedFileAsync(
+        string path,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 16 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await ReadBoundedStreamAsync(stream, maximumBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<string> ReadBoundedStreamAsync(
+        Stream stream,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
         using var memory = new MemoryStream();
         var buffer = new byte[16 * 1024];
-        while (memory.Length <= MaxPageBytes)
+        while (memory.Length <= maximumBytes)
         {
             var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             if (read == 0)
@@ -736,7 +887,21 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             await memory.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
         }
 
-        throw new InvalidOperationException($"Source page exceeds {MaxPageBytes} bytes.");
+        throw new InvalidOperationException($"Content exceeds {maximumBytes} bytes.");
+    }
+
+    private static bool TryGetRemoteSkillUri(string value, out Uri uri)
+    {
+        if (Uri.TryCreate(value, UriKind.Absolute, out var candidate) &&
+            candidate.Scheme == Uri.UriSchemeHttps &&
+            string.IsNullOrEmpty(candidate.UserInfo))
+        {
+            uri = candidate;
+            return true;
+        }
+
+        uri = null!;
+        return false;
     }
 
     private static string ToPlainText(string value)
@@ -779,6 +944,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
+
+    private sealed record RemoteSkillContent(string Content, long SizeBytes, DateTime FetchedAt);
 }
 
 /// <summary>Persisted dashboard registry.</summary>

@@ -11,14 +11,8 @@ public static class DashboardEndpoints
 
         builder.MapGet(
             "/dashboard",
-            static (HttpContext context, IDashboardAuthenticationService authentication) =>
+            static (HttpContext context) =>
             {
-                if (!authentication.IsAuthorized(context) &&
-                    authentication.CanAutomaticallyAuthorize(context))
-                {
-                    authentication.EstablishSession(context);
-                }
-
                 context.Response.Headers.CacheControl = "no-store";
                 context.Response.Headers.ContentSecurityPolicy =
                     "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'";
@@ -45,27 +39,6 @@ public static class DashboardEndpoints
 
             return Results.Json(snapshot, DashboardJsonContext.Default.Snapshot);
         });
-
-        builder.MapPost(
-            "/dashboard/api/session",
-            static (DashboardLoginRequest request, HttpContext context, IDashboardAuthenticationService authentication) =>
-            {
-                if (!authentication.IsApiKeyValid(request.ApiKey))
-                {
-                    return Results.Unauthorized();
-                }
-
-                authentication.EstablishSession(context);
-                return Results.NoContent();
-            });
-
-        builder.MapDelete(
-            "/dashboard/api/session",
-            static (HttpContext context, IDashboardAuthenticationService authentication) =>
-            {
-                authentication.ClearSession(context);
-                return Results.NoContent();
-            });
 
         builder.MapDelete(
             "/dashboard/api/cache/{key}",
@@ -230,8 +203,6 @@ public static class DashboardEndpoints
             h1 { margin: 0; font: 700 28px/1 system-ui, sans-serif; letter-spacing: -.03em; }
             h2 { margin: 0 0 14px; font: 650 16px/1.2 system-ui, sans-serif; }
             p { margin: 6px 0 0; color: var(--muted); }
-            .auth { display: flex; gap: 8px; }
-            .hidden { display: none !important; }
             .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
             .form-row { display: flex; gap: 8px; margin-bottom: 12px; }
             .form-row input { min-width: 0; flex: 1; }
@@ -281,8 +252,6 @@ public static class DashboardEndpoints
             @media (max-width: 560px) {
               .grid { grid-template-columns: 1fr; }
               .wide { grid-column: span 1; }
-              .auth { width: 100%; }
-              .auth input { min-width: 0; flex: 1; }
             }
           </style>
         </head>
@@ -292,12 +261,7 @@ public static class DashboardEndpoints
               <h1>Kare</h1>
               <p><span class="status"><span id="dot" class="dot"></span><span id="connection">Connecting</span></span></p>
             </div>
-            <div class="auth">
-              <input id="token" type="password" autocomplete="off" placeholder="API key, if configured">
-              <button id="login" type="button">Sign in</button>
-              <button id="logout" class="hidden" type="button">Sign out</button>
-              <button id="refresh" type="button">Refresh</button>
-            </div>
+            <button id="refresh" type="button">Refresh</button>
           </header>
           <main>
             <section class="grid">
@@ -312,6 +276,13 @@ public static class DashboardEndpoints
             </section>
 
             <section class="grid section">
+              <article class="card wide">
+                <h2>Model call breakdown</h2>
+                <div style="display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:center;">
+                  <svg id="model-route-chart" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="Model route chart"></svg>
+                  <div id="model-route-legend"></div>
+                </div>
+              </article>
               <article class="card full">
                 <h2>Model endpoints</h2>
                 <div class="table-wrap"><table>
@@ -362,15 +333,15 @@ public static class DashboardEndpoints
                 </table></div>
               </article>
               <article class="card full">
-                <h2>Local skills</h2>
+                <h2>Skills</h2>
                 <div class="form-row">
                   <input id="skill-name" type="text" placeholder="Skill name">
-                  <input id="skill-path" type="text" placeholder="/absolute/path/to/SKILL.md">
+                  <input id="skill-path" type="text" placeholder="/absolute/path/to/SKILL.md or https://example.com/SKILL.md">
                   <input id="skill-description" type="text" placeholder="Description">
                   <button id="add-skill" type="button">Add skill</button>
                 </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Name</th><th>Description</th><th>Path</th><th>Status</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+                  <thead><tr><th>Name</th><th>Description</th><th>File or URL</th><th>Status</th><th>Size</th><th>Modified</th><th></th></tr></thead>
                   <tbody id="skills"></tbody>
                 </table></div>
               </article>
@@ -390,8 +361,6 @@ public static class DashboardEndpoints
             <footer id="generated">No data loaded.</footer>
           </main>
           <script>
-            const tokenInput = document.querySelector('#token');
-
             const escapeHtml = value => String(value ?? '')
               .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
               .replaceAll('>', '&gt;').replaceAll('"', '&quot;')
@@ -399,12 +368,63 @@ public static class DashboardEndpoints
             const time = value => value ? new Date(value).toLocaleString() : 'n/a';
             const number = (value, suffix = '') => value == null ? 'n/a' : `${Number(value).toFixed(1)}${suffix}`;
             const empty = columns => `<tr><td class="empty" colspan="${columns}">No data yet.</td></tr>`;
+            function renderModelBreakdown(snapshot) {
+              const totals = (snapshot.modelEndpoints || []).map((item, index) => ({
+                name: `${item.provider}: ${item.modelId}`,
+                endpoint: item.endpoint,
+                value: item.requestCount || 0,
+                color: `hsl(${(hashString(item.id || String(index)) % 360)}, 68%, 58%)`
+              })).filter(item => item.value > 0);
+
+              const chart = document.querySelector('#model-route-chart');
+              const legend = document.querySelector('#model-route-legend');
+              if (!totals.length) {
+                chart.innerHTML = '<circle cx="100" cy="100" r="80" fill="#172229" stroke="#2a3942" stroke-width="1" />';
+                legend.innerHTML = '<div class="muted">No request data yet.</div>';
+                return;
+              }
+
+              const total = totals.reduce((sum, item) => sum + item.value, 0);
+              let start = -Math.PI / 2;
+              const segments = totals.map(item => {
+                const angle = (item.value / total) * Math.PI * 2;
+                const end = start + angle;
+                const largeArc = angle > Math.PI ? 1 : 0;
+                const x1 = 100 + 80 * Math.cos(start);
+                const y1 = 100 + 80 * Math.sin(start);
+                const x2 = 100 + 80 * Math.cos(end);
+                const y2 = 100 + 80 * Math.sin(end);
+                const path = `M 100 100 L ${x1} ${y1} A 80 80 0 ${largeArc} 1 ${x2} ${y2} Z`;
+                start = end;
+                return { ...item, path, pct: item.value / total, full: item.value === total };
+              });
+
+              chart.innerHTML = segments.map(segment => segment.full
+                ? `<circle cx="100" cy="100" r="80" fill="${segment.color}" stroke="#0b1014" stroke-width="1"></circle>`
+                : `<path d="${segment.path}" fill="${segment.color}" stroke="#0b1014" stroke-width="1"></path>`).join('');
+              legend.innerHTML = segments.map(segment => `
+                <div style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+                  <span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${segment.color};"></span>
+                  <span title="${escapeHtml(segment.endpoint)}">${escapeHtml(segment.name)}</span>
+                  <span class="muted">${segment.value} (${((segment.pct) * 100).toFixed(1)}%)</span>
+                </div>`).join('');
+            }
+
+            function hashString(value) {
+              let hash = 0;
+              for (let i = 0; i < value.length; i++) {
+                hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+              }
+              return hash;
+            }
+
             function render(snapshot) {
               const requests = snapshot.requests || [];
               const successful = requests.filter(item => item.succeeded).length;
               const rates = requests.map(item => item.decodeTokensPerSecond).filter(value => value != null);
               const local = requests.filter(item => !item.isBillable && item.route !== 'Cache').length;
               const billable = requests.filter(item => item.isBillable).length;
+              renderModelBreakdown(snapshot);
 
               document.querySelector('#requests-total').textContent =
                 snapshot.workload?.totalRequestsProcessed ?? requests.length;
@@ -501,44 +521,17 @@ public static class DashboardEndpoints
               const connection = document.querySelector('#connection');
               try {
                 const response = await fetch('/dashboard/api/snapshot', { cache: 'no-store' });
-                if (response.status === 401) throw new Error('API key required');
+                if (response.status === 403) throw new Error('Local network access required');
                 if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
                 render(await response.json());
                 dot.className = 'dot ok';
                 connection.textContent = 'Connected';
-                tokenInput.classList.add('hidden');
-                document.querySelector('#login').classList.add('hidden');
-                document.querySelector('#logout').classList.remove('hidden');
               } catch (error) {
                 dot.className = 'dot error';
                 connection.textContent = error.message;
-                if (error.message === 'API key required') {
-                  tokenInput.classList.remove('hidden');
-                  document.querySelector('#login').classList.remove('hidden');
-                  document.querySelector('#logout').classList.add('hidden');
-                }
               }
             }
 
-            document.querySelector('#login').addEventListener('click', async () => {
-              const token = tokenInput.value.trim();
-              if (!token) return;
-              const response = await fetch('/dashboard/api/session', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ apiKey: token })
-              });
-              tokenInput.value = '';
-              if (!response.ok) {
-                document.querySelector('#connection').textContent = 'Invalid API key';
-                return;
-              }
-              refresh();
-            });
-            document.querySelector('#logout').addEventListener('click', async () => {
-              await fetch('/dashboard/api/session', { method: 'DELETE' });
-              refresh();
-            });
             document.querySelector('#refresh').addEventListener('click', refresh);
             document.querySelector('#cache').addEventListener('click', async event => {
               const key = event.target.dataset.cacheKey;
