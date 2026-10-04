@@ -276,7 +276,7 @@ Use this order:
 5. Publish Native AOT on the device or in a pinned Ubuntu 24.04 ARM64 build environment.
 6. Attempt x86_64 to ARM64 cross-publishing only after the native dependency set is reproducible.
 
-The board-native path is currently the fastest measured path. On 2026-10-02, the VENTUNO Q restored and published the GenieX-enabled service as self-contained Native AOT in 89.36 seconds. The x86_64 host's emulated ARM64 container was still linking after the board completed. Use the board SDK for active iterations, and keep `build/publish-arm64.sh` as the reproducible container fallback.
+The board-native path is faster than emulated ARM64, but Native AOT code generation still makes routine iterations unnecessarily slow. Use the framework-dependent ARM64 JIT path in `build/device-publish.sh --jit` for active development. It runs with the project-local .NET 11 runtime because the board's global runtime is .NET 10. Use `build/device-publish.sh --aot` for release candidates and periodic AOT compatibility checks. Keep `build/publish-arm64.sh` as the reproducible container fallback.
 
 The release artifact should target `linux-arm64`, carry no .NET runtime requirement, and keep models and Qualcomm libraries outside the main executable. Do not call the deployment a single binary when separate provider libraries are still required.
 

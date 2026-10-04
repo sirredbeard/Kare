@@ -40,6 +40,26 @@ build/tunnel.sh
 
 The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. Kare must support streaming and tool calls for full Copilot CLI compatibility. The current local GenieX route is suitable for basic text validation, but structured local tool calls remain an open limitation.
 
+## Device iteration
+
+Use framework-dependent JIT builds for normal development on the VENTUNO Q:
+
+```bash
+~/.local/bin/kare-sync
+cd ~/Kare
+build/device-publish.sh --jit --test
+```
+
+The device service must have `DOTNET_ROOT` set to the project-local `.NET 11` installation, normally `~/Kare/.dotnet`. The board's global .NET 10 runtime cannot run Kare's `net11.0` build.
+
+Native AOT remains supported, but it is a release validation path rather than the normal edit and test loop:
+
+```bash
+build/device-publish.sh --aot --test
+```
+
+The JIT and AOT modes deploy to separate versioned release directories and update the same `~/kare/service/current` symlink atomically.
+
 
 ## Related projects
 
