@@ -209,6 +209,14 @@ The cloud adapter uses one provider-neutral model catalog. GitHub Copilot entrie
 
 Lerna is a reference implementation for provider mapping, wire adaptation, and Cognitive Services token scope. It is not a Kare runtime dependency. Protected Lerna mappings may be transformed into Kare's external catalog for local testing, but Lerna settings, auth state, resource details, deployments, and endpoints must not enter the repository.
 
+### Cloud model inventory findings
+
+The signed-in GitHub Copilot account currently exposes the public model families documented by GitHub, including GPT-5.6 Luna, Sol, and Terra, Claude Haiku 4.5, Claude Sonnet 5, Claude Opus 5, Gemini 3.8 Flash, MAI-Code-1.1-Flash, Kimi K3, and Grok 4.7. The exact list remains plan- and client-dependent, so public documentation is not enough to enable a route. Validate the installed Copilot CLI and account before changing automatic selection.
+
+The protected Azure account currently exposes 163 Foundry model definitions and five active deployments. The active deployments are `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `claude-sonnet-4-6`, and `claude-opus-5`. `gpt-5.6-sol` and `claude-sonnet-4-6` are now catalog candidates. The available model list includes cheaper-looking small models such as `gpt-5.4-mini`, `gpt-5.4-nano`, `Phi-4-mini-instruct`, and `qwen3-32b`, but pricing, quota, deployment capacity, tool support, and latency are not yet verified. Do not call a model cheaper until Azure pricing or measured account cost confirms it.
+
+The protected catalog now adds explicit, non-default routes for the deployed `gpt-5.6-sol` and `claude-sonnet-4-6` models. Existing `kare-fast`, `kare-copilot`, and `kare-complex` behavior remains unchanged. New routes must pass streaming, cancellation, usage, and failure tests before they receive automatic-routing priority.
+
 ## Model and runtime plan
 
 ### First local candidates
@@ -581,7 +589,7 @@ Progress as of 2026-10-03. The service and both measured backends run on the boa
 | 4 service skeleton | Routing and LAN boundary implemented | The service now exposes explicit local, cloud, and automatic model IDs; records actual routes; rejects unsupported ONNX tool calls; enforces API-key plus CIDR requirements for non-loopback binding; and retains bounded inference admission |
 | 5 cache and shared knowledge | Conservative response cache implemented | The opt-in memory cache accepts deterministic non-streaming text-only requests and has bounded size, lifetime, and response length. Repository fingerprints, durable shared knowledge, embeddings, invalidation commands, and cache-quality measurements remain open |
 | 6 Copilot integration | Tiered routing implemented; cloud device validation open | Copilot CLI 1.0.91 reached Kare. Local text, streaming, authentication, and cache behavior pass on the board, but Kare-to-GenieX tool-call translation remains open. GitHub Copilot SDK `auto` returned a live bounded response on x64, cloud text arrived as real deltas, and declaration-only required tools were returned without execution |
-| 7 Kare orchestration and Foundry | Unified catalog and Entra token path implemented; live validation open | Kare selects local, low-cost Copilot, heavy Copilot, or Foundry tiers from explicit aliases and deterministic request shape. A protected external catalog now separates model IDs from wire deployments, supports Responses and Anthropic routes, and uses scoped Azure CLI bearer tokens. Copilot model IDs were checked on the signed-in host account. Live Foundry and ARM64 validation remain open |
+| 7 Kare orchestration and Foundry | Unified catalog and inventory closed; route validation open | Kare selects local, low-cost Copilot, heavy Copilot, or Foundry tiers from explicit aliases and deterministic request shape. The protected external catalog separates model IDs from wire deployments, supports Responses and Anthropic routes, and uses scoped Azure CLI bearer tokens. The signed-in Copilot account and Azure Foundry resource were inventoried. New Sol and Sonnet routes are explicit but not automatic until live validation passes |
 
 ### Stage 0: protect the boundary
 
@@ -663,7 +671,10 @@ runtime                project-local .NET 11 RC on the board
 
 - Keep the deterministic local, moderate Copilot, heavy Copilot, and complex Foundry tiers explicit.
 - Validate every configured Copilot model against the account before enabling automatic billable routing.
+- Recheck the official Copilot model list and the installed CLI account during each catalog refresh. Public availability is not proof of entitlement or SDK compatibility.
 - Configure each Foundry deployment outside the repository with an HTTPS resource base URL, a well-known model ID, a separate wire deployment name, the Responses or Anthropic Messages wire, and an authentication mode.
+- Inventory Foundry with `az cognitiveservices account list-models` and `az cognitiveservices account deployment list`. Treat model definitions as candidates and active deployments as the only immediately testable routes.
+- Record model version, deployment SKU, capacity, tool support, streaming behavior, latency, and observed cost before changing route priority. Availability alone is not a price comparison.
 - Prefer scoped Entra bearer tokens. Kare currently obtains Azure access tokens from a protected Azure CLI profile with a bounded command timeout and in-memory reuse by scope. The SDK may ask for a token before each provider request, but `az account get-access-token` runs only on a cold cache or during the two-minute refresh window. Managed identity is a later option if the deployment environment supports it.
 - Test each mapped model with a known request and verify streaming, cancellation, caller-owned tool calls, route metadata, latency, and usage. Keep Foundry tool support disabled in the catalog until those tests pass.
 - Add cascade or critique only as a later bounded strategy with an explicit maximum provider-call count and budget.

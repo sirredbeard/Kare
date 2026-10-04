@@ -29,6 +29,8 @@ Repository defaults keep cloud routing disabled and define no cloud model catalo
 
 The catalog keeps each public model ID separate from its provider wire deployment. GitHub Copilot routes use the signed-in Copilot account. Microsoft Foundry routes support the Responses and Anthropic Messages wires and may use a scoped Azure CLI bearer token. Kare does not run `az` for every model call. The Copilot SDK can request a token before a provider request, but Kare reuses the in-memory token for its remaining lifetime and invokes `az account get-access-token` only on a cold cache or when the token is within its two-minute refresh window. Keep the configuration file, Azure CLI state, endpoints, deployments, and credentials outside the repository with restrictive permissions.
 
+Refresh the catalog from the account, not from the public model list alone. Use `az cognitiveservices account list-models` to find model definitions and `az cognitiveservices account deployment list` to find routes that can be tested immediately. Keep new routes explicit and out of automatic selection until streaming, cancellation, usage, tool behavior, latency, and cost have been measured. Availability is not proof that a model is cheaper.
+
 ## Host Copilot CLI through Kare
 
 When Kare is loopback-only on the device, open the protected SSH tunnel with `build/tunnel.sh`. The host launcher at `~/.config/kare/copilot-byok.sh` then exports the documented Copilot CLI OpenAI-compatible provider variables and starts Copilot without changing the host's normal Copilot or Lerna settings:
