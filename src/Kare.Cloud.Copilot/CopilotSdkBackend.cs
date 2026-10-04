@@ -480,7 +480,7 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         }
 
         return required.RequiredFunctionName is { Length: > 0 } name
-            ? $"{prompt}\nYou must request the external tool named {name} before answering."
+            ? $"{prompt}\nYou must request the external tool named {ToSdkToolName(name)} before answering."
             : $"{prompt}\nYou must request one of the offered external tools before answering.";
     }
 
@@ -673,7 +673,7 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 ChatRole.Assistant,
                 [new FunctionCallContent(
                     toolCallId,
-                    toolName,
+                    ToCallerToolName(toolName),
                     ToArguments(arguments))]))
         {
             FinishReason = ChatFinishReason.ToolCalls,
@@ -705,11 +705,17 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         };
         update.Contents.Add(new FunctionCallContent(
             toolCallId,
-            toolName,
+            ToCallerToolName(toolName),
             ToArguments(arguments)));
         writer.TryWrite(update);
         writer.TryComplete();
     }
+
+    private static string ToSdkToolName(string name) =>
+        string.Equals(name, "bash", StringComparison.Ordinal) ? "kare_external_bash" : name;
+
+    private static string ToCallerToolName(string name) =>
+        string.Equals(name, "kare_external_bash", StringComparison.Ordinal) ? "bash" : name;
 
     private static UsageDetails? CreateUsage(long? inputTokens, long? outputTokens) =>
         inputTokens is null && outputTokens is null

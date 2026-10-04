@@ -22,7 +22,7 @@ internal sealed class PassthroughFunctionDeclaration : AIFunctionDeclaration
     public PassthroughFunctionDeclaration(string name, string? description, JsonElement? parameters)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        _name = name;
+        _name = ToSdkToolName(name);
         _description = description ?? string.Empty;
         _schema = parameters?.ValueKind is JsonValueKind.Object
             ? parameters.Value.Clone()
@@ -45,4 +45,7 @@ internal sealed class PassthroughFunctionDeclaration : AIFunctionDeclaration
         ["is_override"] = true,
         ["overridesBuiltInTool"] = true,
     };
+
+    internal static string ToSdkToolName(string name) =>
+        string.Equals(name, "bash", StringComparison.Ordinal) ? "kare_external_bash" : name;
 }
