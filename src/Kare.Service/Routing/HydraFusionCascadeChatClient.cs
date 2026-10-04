@@ -5,6 +5,7 @@ using Kare.Core.Inference;
 using Kare.Core.Options;
 using Kare.Inference.GenieX;
 using Kare.Service.Cache;
+using Kare.Service.Dashboard;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -93,7 +94,11 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 cancellationToken).ConfigureAwait(false);
         }
 
-        var gate = await RunLocalGateAsync(decisionMessages, candidates, cancellationToken).ConfigureAwait(false);
+        var gate = await RunLocalGateAsync(
+            decisionMessages,
+            candidates,
+            requiresTools,
+            cancellationToken).ConfigureAwait(false);
         if (gate.Answer is not null && !requiresTools)
         {
             _routeContext.Current = gate.Decision;
@@ -161,7 +166,11 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         }
         else
         {
-            var gate = await RunLocalGateAsync(decisionMessages, candidates, cancellationToken)
+            var gate = await RunLocalGateAsync(
+                decisionMessages,
+                candidates,
+                requiresTools,
+                cancellationToken)
                 .ConfigureAwait(false);
             if (gate.Answer is not null && !requiresTools)
             {
@@ -207,6 +216,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
     private async Task<LocalGateResult> RunLocalGateAsync(
         IReadOnlyList<ChatMessage> decisionMessages,
         IReadOnlyList<CloudModelDescriptor> candidates,
+        bool requiresTools,
         CancellationToken cancellationToken)
     {
         var decision = LocalDecision(
@@ -221,6 +231,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             AdditionalProperties = new()
             {
                 [GenieXBackend.DisableThinkingOptionName] = true,
+                [ContextEnrichingChatClient.SkipKnowledgeContextOptionName] = requiresTools,
             },
         };
 
@@ -411,6 +422,12 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             candidates.Select(static candidate =>
                 $"- {candidate.Id}: {candidate.ModelId}; tier={candidate.Tier}; tools={candidate.SupportsTools}"));
         var toolCount = options?.Tools?.Count ?? 0;
+        var toolNames = string.Join(
+            ", ",
+            options?.Tools?
+                .OfType<AIFunctionDeclaration>()
+                .Select(static tool => tool.Name)
+                .Take(32) ?? []);
         var totalCharacters = CountTextCharacters(messages);
         var instructions = $"""
             You are Kare's local Qwen cascade gate. Dashboard authoritative sources and enabled skills
@@ -427,7 +444,8 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             or the request is simple and reliable without repository access or tools. Escalate coding,
             repository, tool, uncertain, or long-context work. Choose the earliest sufficient target.
 
-            Request metadata: characters={totalCharacters}; messages={messages.Count}; tools={toolCount}.
+            Request metadata: characters={totalCharacters}; messages={messages.Count}; tools={toolCount};
+            tool names={toolNames}.
             Ordered cloud targets:
             {candidateList}
             """;

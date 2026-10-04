@@ -3,6 +3,7 @@ using Kare.Abstractions;
 using Kare.Core;
 using Kare.Core.Options;
 using Kare.Service.Cache;
+using Kare.Service.Dashboard;
 using Kare.Service.Options;
 using Kare.Service.Routing;
 using Microsoft.Extensions.AI;
@@ -100,11 +101,17 @@ public sealed class HydraFusionCascadeChatClientTests
     [Fact]
     public async Task ToolRequestUsesOnlyToolCapableCloudTargets()
     {
-        var local = new ScriptedChatClient((messages, _) =>
+        var local = new ScriptedChatClient((messages, options) =>
         {
             var instructions = messages[0].Text;
             Assert.DoesNotContain("no-tools:", instructions, StringComparison.Ordinal);
             Assert.Contains("strong:", instructions, StringComparison.Ordinal);
+            Assert.Contains("inspect_repository", instructions, StringComparison.Ordinal);
+            Assert.True(
+                options?.AdditionalProperties?.TryGetValue(
+                    ContextEnrichingChatClient.SkipKnowledgeContextOptionName,
+                    out var skip) == true &&
+                skip is true);
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, "KARE_ANSWER:\nUnsafe local answer."));
         });
         var cloud = new ScriptedCloudBackend();

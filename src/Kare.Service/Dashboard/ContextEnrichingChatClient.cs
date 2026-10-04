@@ -6,6 +6,8 @@ namespace Kare.Service.Dashboard;
 /// <summary>Adds bounded Kare-managed source and skill context to local inference only.</summary>
 public sealed class ContextEnrichingChatClient : IChatClient
 {
+    public const string SkipKnowledgeContextOptionName = "kare.context.skip-knowledge";
+
     private readonly IChatClient _inner;
     private readonly IDashboardKnowledgeService _knowledge;
 
@@ -21,6 +23,12 @@ public sealed class ContextEnrichingChatClient : IChatClient
         CancellationToken cancellationToken = default)
     {
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToArray();
+        if (ShouldSkipKnowledge(options))
+        {
+            return await _inner.GetResponseAsync(materialized, options, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var enriched = await _knowledge
             .AddLocalContextAsync(materialized, cancellationToken)
             .ConfigureAwait(false);
@@ -33,6 +41,18 @@ public sealed class ContextEnrichingChatClient : IChatClient
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToArray();
+        if (ShouldSkipKnowledge(options))
+        {
+            await foreach (var update in _inner
+                .GetStreamingResponseAsync(materialized, options, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                yield return update;
+            }
+
+            yield break;
+        }
+
         var enriched = await _knowledge
             .AddLocalContextAsync(materialized, cancellationToken)
             .ConfigureAwait(false);
@@ -49,4 +69,10 @@ public sealed class ContextEnrichingChatClient : IChatClient
         serviceType.IsInstanceOfType(this) ? this : _inner.GetService(serviceType, serviceKey);
 
     public void Dispose() => _inner.Dispose();
+
+    private static bool ShouldSkipKnowledge(ChatOptions? options) =>
+        options?.AdditionalProperties?.TryGetValue(
+            SkipKnowledgeContextOptionName,
+            out var skip) == true &&
+        skip is true;
 }
