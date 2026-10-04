@@ -13,14 +13,50 @@ public static class DashboardMetrics
         DateTime Timestamp,
         string Route,
         string ModelId,
+        string? ProviderRouteId,
         string Backend,
         bool IsBillable,
         bool IsFallback,
         bool Succeeded,
         double TimeToFirstTokenMs,
         double TotalDurationMs,
+        long? InputTokens,
         long? OutputTokens,
         double? DecodeTokensPerSecond);
+
+    /// <summary>
+    /// Aggregated usage for one model, backend, and route combination.
+    /// </summary>
+    public sealed record ModelUsage(
+        string ModelId,
+        string? ProviderRouteId,
+        string Backend,
+        string Route,
+        long RequestCount,
+        long SuccessfulRequests,
+        long FailedRequests,
+        long BillableRequests,
+        long FallbackRequests,
+        long InputTokens,
+        long OutputTokens,
+        double AverageTimeToFirstTokenMs,
+        double AverageTotalDurationMs,
+        double? AverageDecodeTokensPerSecond,
+        DateTime LastUsedAt);
+
+    /// <summary>Configured model endpoint and its observed request totals.</summary>
+    public sealed record ModelEndpoint(
+        string Id,
+        string Provider,
+        string ModelId,
+        string? WireModel,
+        string Endpoint,
+        string Tier,
+        bool SupportsTools,
+        long RequestCount,
+        long InputTokens,
+        long OutputTokens,
+        DateTime? LastUsedAt);
 
     /// <summary>
     /// High-level activity: routing decision, fallback event, or service action.
@@ -55,13 +91,19 @@ public static class DashboardMetrics
         double AverageTimeToFirstTokenMs);
 
     /// <summary>
-    /// URL registry entry for local vs cloud routing decision thresholds.
+    /// Authoritative web source crawled for local model context.
     /// </summary>
     public record RoutingDecisionUrl(
-        string Url,
-        bool PreferLocal,
+        string Id,
+        string Pattern,
+        bool Enabled,
         DateTime CreatedAt,
-        DateTime LastModifiedAt);
+        DateTime LastModifiedAt,
+        DateTime? LastCrawledAt,
+        int PageCount,
+        int ContentCharacters,
+        string Status,
+        string? Error);
 
     /// <summary>
     /// Skill available to SLM.
@@ -70,7 +112,10 @@ public static class DashboardMetrics
         string Name,
         string Path,
         string Description,
-        DateTime LastModifiedAt);
+        bool Enabled,
+        long SizeBytes,
+        DateTime LastModifiedAt,
+        string Status);
 
     /// <summary>
     /// MCP server linked to SLM.
@@ -80,13 +125,17 @@ public static class DashboardMetrics
         string Endpoint,
         string[] Capabilities,
         bool Connected,
-        DateTime LastConnectedAt);
+        DateTime? LastConnectedAt,
+        DateTime? LastCheckedAt,
+        string? Error);
 
     /// <summary>
     /// Complete point-in-time dashboard payload.
     /// </summary>
     public record Snapshot(
         DateTime GeneratedAt,
+        IReadOnlyList<ModelEndpoint> ModelEndpoints,
+        IReadOnlyList<ModelUsage> ModelUsage,
         IReadOnlyList<RequestMetric> Requests,
         IReadOnlyList<Activity> Activities,
         IReadOnlyList<CacheEntry> CacheEntries,

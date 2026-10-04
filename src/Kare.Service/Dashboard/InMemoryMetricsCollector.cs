@@ -12,6 +12,7 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
     private readonly Lock _sync = new();
     private readonly List<DashboardMetrics.RequestMetric> _requests = [];
     private readonly List<DashboardMetrics.Activity> _activities = [];
+    private readonly Dictionary<ModelUsageKey, ModelUsageAccumulator> _modelUsage = [];
     private readonly Dictionary<string, DashboardMetrics.CacheEntry> _cacheEntries =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, DashboardMetrics.RoutingDecisionUrl> _routingDecisionUrls =
@@ -28,6 +29,19 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
         lock (_sync)
         {
             AddNewest(_requests, request, MaxRequests);
+
+            var key = new ModelUsageKey(
+                request.ModelId,
+                request.ProviderRouteId,
+                request.Backend,
+                request.Route);
+            if (!_modelUsage.TryGetValue(key, out var usage))
+            {
+                usage = new ModelUsageAccumulator();
+                _modelUsage[key] = usage;
+            }
+
+            usage.Record(request);
         }
     }
 
@@ -78,8 +92,17 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
         ArgumentNullException.ThrowIfNull(url);
         lock (_sync)
         {
-            _routingDecisionUrls[url.Url] = url;
+            _routingDecisionUrls[url.Id] = url;
             TrimOldest(_routingDecisionUrls, MaxRegistryEntries, static value => value.LastModifiedAt);
+        }
+    }
+
+    public void RemoveRoutingDecisionUrl(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        lock (_sync)
+        {
+            _routingDecisionUrls.Remove(id);
         }
     }
 
@@ -93,13 +116,34 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
         }
     }
 
+    public void RemoveSkill(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        lock (_sync)
+        {
+            _skills.Remove(name);
+        }
+    }
+
     public void RegisterMcpServer(DashboardMetrics.McpServerInfo server)
     {
         ArgumentNullException.ThrowIfNull(server);
         lock (_sync)
         {
             _mcpServers[server.Name] = server;
-            TrimOldest(_mcpServers, MaxRegistryEntries, static value => value.LastConnectedAt);
+            TrimOldest(
+                _mcpServers,
+                MaxRegistryEntries,
+                static value => value.LastCheckedAt ?? DateTime.MinValue);
+        }
+    }
+
+    public void RemoveMcpServer(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        lock (_sync)
+        {
+            _mcpServers.Remove(name);
         }
     }
 
@@ -116,6 +160,20 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
         lock (_sync)
         {
             return [.. _activities];
+        }
+    }
+
+    public IReadOnlyList<DashboardMetrics.ModelUsage> GetModelUsage()
+    {
+        lock (_sync)
+        {
+            return
+            [
+                .. _modelUsage
+                    .Select(static pair => pair.Value.ToMetric(pair.Key))
+                    .OrderByDescending(static usage => usage.RequestCount)
+                    .ThenBy(static usage => usage.ModelId, StringComparer.Ordinal)
+            ];
         }
     }
 
@@ -139,7 +197,7 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
     {
         lock (_sync)
         {
-            return [.. _routingDecisionUrls.Values.OrderBy(static entry => entry.Url, StringComparer.Ordinal)];
+            return [.. _routingDecisionUrls.Values.OrderBy(static entry => entry.Pattern, StringComparer.Ordinal)];
         }
     }
 
@@ -179,5 +237,75 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
             var oldest = items.MinBy(pair => timestamp(pair.Value));
             items.Remove(oldest.Key);
         }
+    }
+
+    private readonly record struct ModelUsageKey(
+        string ModelId,
+        string? ProviderRouteId,
+        string Backend,
+        string Route);
+
+    private sealed class ModelUsageAccumulator
+    {
+        private long _requests;
+        private long _successful;
+        private long _billable;
+        private long _fallback;
+        private long _inputTokens;
+        private long _outputTokens;
+        private double _timeToFirstTokenMs;
+        private double _totalDurationMs;
+        private double _decodeRate;
+        private long _decodeRateSamples;
+        private DateTime _lastUsedAt;
+
+        public void Record(DashboardMetrics.RequestMetric request)
+        {
+            _requests++;
+            if (request.Succeeded)
+            {
+                _successful++;
+            }
+
+            if (request.IsBillable)
+            {
+                _billable++;
+            }
+
+            if (request.IsFallback)
+            {
+                _fallback++;
+            }
+
+            _inputTokens += request.InputTokens ?? 0;
+            _outputTokens += request.OutputTokens ?? 0;
+            _timeToFirstTokenMs += request.TimeToFirstTokenMs;
+            _totalDurationMs += request.TotalDurationMs;
+            _lastUsedAt = request.Timestamp;
+
+            if (request.DecodeTokensPerSecond is { } decodeRate)
+            {
+                _decodeRate += decodeRate;
+                _decodeRateSamples++;
+            }
+        }
+
+        public DashboardMetrics.ModelUsage ToMetric(ModelUsageKey key) =>
+            new(
+                key.ModelId,
+                key.ProviderRouteId,
+                key.Backend,
+                key.Route,
+                _requests,
+                _successful,
+                _requests - _successful,
+                _billable,
+                _fallback,
+                _inputTokens,
+                _outputTokens,
+                _timeToFirstTokenMs / _requests,
+                _totalDurationMs / _requests,
+                _decodeRateSamples == 0 ? null : _decodeRate / _decodeRateSamples,
+                _lastUsedAt);
     }
 }

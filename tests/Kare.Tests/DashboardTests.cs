@@ -5,6 +5,8 @@ using Kare.Service.Api;
 using Kare.Service.Dashboard;
 using Kare.Service.Options;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -86,7 +88,8 @@ public sealed class DashboardTests
                 nextCalled = true;
                 return Task.CompletedTask;
             },
-            Options.Create(new KareServiceOptions { ApiKey = "secret" }));
+            Options.Create(new KareServiceOptions { ApiKey = "secret" }),
+            CreateAuthentication());
         var context = new DefaultHttpContext();
         context.Request.Path = path;
 
@@ -96,6 +99,118 @@ public sealed class DashboardTests
         Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
     }
 
+    [Fact]
+    public void DashboardSessionUsesHttpOnlyCookieWithoutExposingApiKey()
+    {
+        var authentication = CreateAuthentication();
+        var loginContext = new DefaultHttpContext();
+
+        Assert.True(authentication.IsApiKeyValid("secret"));
+        authentication.EstablishSession(loginContext);
+
+        var setCookie = Assert.Single(loginContext.Response.Headers.SetCookie);
+        Assert.NotNull(setCookie);
+        Assert.Contains("httponly", setCookie, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secret", setCookie, StringComparison.Ordinal);
+
+        var requestContext = new DefaultHttpContext();
+        requestContext.Request.Headers.Cookie = setCookie.Split(';', 2)[0];
+        Assert.True(authentication.IsAuthorized(requestContext));
+    }
+
+    [Fact]
+    public void ModelUsageAggregatesTokenAndLatencyMetrics()
+    {
+        var collector = new InMemoryMetricsCollector();
+        collector.RecordRequest(CreateRequest(inputTokens: 10, outputTokens: 5, succeeded: true));
+        collector.RecordRequest(CreateRequest(inputTokens: 20, outputTokens: 7, succeeded: false));
+
+        var usage = Assert.Single(collector.GetModelUsage());
+        Assert.Equal(2, usage.RequestCount);
+        Assert.Equal(1, usage.SuccessfulRequests);
+        Assert.Equal(1, usage.FailedRequests);
+        Assert.Equal(30, usage.InputTokens);
+        Assert.Equal(12, usage.OutputTokens);
+        Assert.Equal(120, usage.AverageTimeToFirstTokenMs);
+        Assert.Equal(300, usage.AverageTotalDurationMs);
+    }
+
+    [Fact]
+    public async Task EnabledSkillIsInjectedIntoLocalContext()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var skillPath = Path.Combine(directory, "SKILL.md");
+        var statePath = Path.Combine(directory, "registry.json");
+        await File.WriteAllTextAsync(
+            skillPath,
+            "Always use the measured device runtime.",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var service = new DashboardKnowledgeService(
+                new InMemoryMetricsCollector(),
+                new StaticHttpClientFactory(),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await service.AddSkillAsync(
+                new CreateDashboardSkillRequest(
+                    "device-runtime",
+                    skillPath,
+                    "Device runtime rule",
+                    Enabled: true),
+                TestContext.Current.CancellationToken);
+
+            var enriched = await service.AddLocalContextAsync(
+                [new ChatMessage(ChatRole.User, "Which runtime should I use?")],
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(2, enriched.Count);
+            Assert.Contains(
+                "Always use the measured device runtime.",
+                enriched[0].Contents.OfType<TextContent>().Single().Text,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(skillPath))
+            {
+                File.Delete(skillPath);
+            }
+
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            Directory.Delete(directory);
+        }
+    }
+
+    private static DashboardMetrics.RequestMetric CreateRequest(
+        long inputTokens,
+        long outputTokens,
+        bool succeeded) =>
+        new(
+            Guid.NewGuid().ToString("N"),
+            DateTime.UtcNow,
+            "LocalSlm",
+            "test-model",
+            ProviderRouteId: null,
+            Backend: "GenieXQairt",
+            IsBillable: false,
+            IsFallback: false,
+            Succeeded: succeeded,
+            TimeToFirstTokenMs: 120,
+            TotalDurationMs: 300,
+            InputTokens: inputTokens,
+            OutputTokens: outputTokens,
+            DecodeTokensPerSecond: 4);
+
+    private static DashboardAuthenticationService CreateAuthentication() =>
+        new(Options.Create(new KareServiceOptions { ApiKey = "secret" }));
+
     private sealed class CapturingRouteRecorder : IRouteRecorder
     {
         public ValueTask RecordAsync(
@@ -103,5 +218,10 @@ public sealed class DashboardTests
             RouteUsage usage,
             CancellationToken cancellationToken = default) =>
             ValueTask.CompletedTask;
+    }
+
+    private sealed class StaticHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
     }
 }

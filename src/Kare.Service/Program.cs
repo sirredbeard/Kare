@@ -81,6 +81,22 @@ builder.Services.AddSingleton<MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
 builder.Services.AddSingleton<ResponseCache>();
 builder.Services.AddSingleton<IDashboardMetricsCollector, InMemoryMetricsCollector>();
+builder.Services.AddSingleton<IDashboardAuthenticationService, DashboardAuthenticationService>();
+builder.Services.AddSingleton<IModelEndpointProvider, ModelEndpointProvider>();
+builder.Services.AddSingleton<DashboardKnowledgeService>();
+builder.Services.AddSingleton<IDashboardKnowledgeService>(
+    sp => sp.GetRequiredService<DashboardKnowledgeService>());
+builder.Services.AddSingleton<IHostedService>(
+    sp => sp.GetRequiredService<DashboardKnowledgeService>());
+builder.Services.AddHttpClient(nameof(DashboardKnowledgeService), client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Kare/1.0");
+})
+.ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler
+{
+    AllowAutoRedirect = false,
+});
 builder.Services.AddSingleton<IRouteRecorder>(sp =>
     new DashboardActivity(
         sp.GetRequiredService<MetricsRouteRecorder>(),
@@ -117,6 +133,9 @@ builder.Services.AddSingleton<IChatClient>(sp =>
     // These bounds protect only the passive local SLM. Cloud routes must be able to
     // accept the larger prompts sent by Copilot CLI and other OpenAI clients.
     IChatClient boundedLocal = new BoundedChatClient(selected.Backend, gate, limits);
+    boundedLocal = new ContextEnrichingChatClient(
+        boundedLocal,
+        sp.GetRequiredService<IDashboardKnowledgeService>());
     return new KareRoutingChatClient(
         boundedLocal,
         sp.GetRequiredService<ICloudInferenceBackend>(),

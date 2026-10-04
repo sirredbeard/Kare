@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Kare.Service.Dashboard;
 using Kare.Service.Options;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
@@ -17,16 +18,22 @@ public sealed class ApiKeyMiddleware
     private readonly RequestDelegate _next;
     private readonly byte[] _expected;
     private readonly bool _enabled;
+    private readonly IDashboardAuthenticationService _dashboardAuthentication;
 
     /// <summary>Creates the middleware.</summary>
-    public ApiKeyMiddleware(RequestDelegate next, IOptions<KareServiceOptions> options)
+    public ApiKeyMiddleware(
+        RequestDelegate next,
+        IOptions<KareServiceOptions> options,
+        IDashboardAuthenticationService dashboardAuthentication)
     {
         ArgumentNullException.ThrowIfNull(next);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(dashboardAuthentication);
 
         _next = next;
         _expected = Encoding.UTF8.GetBytes(options.Value.ApiKey);
         _enabled = _expected.Length > 0;
+        _dashboardAuthentication = dashboardAuthentication;
     }
 
     /// <summary>Validates the bearer token, then continues the pipeline.</summary>
@@ -34,17 +41,23 @@ public sealed class ApiKeyMiddleware
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var protectedPath =
-            context.Request.Path.StartsWithSegments("/v1") ||
-            context.Request.Path.StartsWithSegments("/dashboard/api");
+        var dashboardApi = context.Request.Path.StartsWithSegments("/dashboard/api");
+        var dashboardLogin =
+            context.Request.Path.Equals("/dashboard/api/session") &&
+            HttpMethods.IsPost(context.Request.Method);
+        var protectedPath = context.Request.Path.StartsWithSegments("/v1") || dashboardApi;
 
-        if (!_enabled || !protectedPath)
+        if (!_enabled || !protectedPath || dashboardLogin)
         {
             await _next(context).ConfigureAwait(false);
             return;
         }
 
-        if (!IsAuthorized(context))
+        var authorized = dashboardApi
+            ? _dashboardAuthentication.IsAuthorized(context) || IsBearerAuthorized(context)
+            : IsBearerAuthorized(context);
+
+        if (!authorized)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             context.Response.Headers.WWWAuthenticate = "Bearer";
@@ -54,7 +67,7 @@ public sealed class ApiKeyMiddleware
         await _next(context).ConfigureAwait(false);
     }
 
-    private bool IsAuthorized(HttpContext context)
+    private bool IsBearerAuthorized(HttpContext context)
     {
         string? header = context.Request.Headers.Authorization;
         if (header is null || !header.StartsWith("Bearer ", StringComparison.Ordinal))

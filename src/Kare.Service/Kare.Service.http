@@ -1,0 +1,53 @@
+@baseUrl = http://127.0.0.1:5285
+@apiKey = replace-with-protected-api-key
+
+### Health
+GET {{baseUrl}}/health
+
+### Dashboard login
+POST {{baseUrl}}/dashboard/api/session
+Content-Type: application/json
+
+{
+  "apiKey": "{{apiKey}}"
+}
+
+### Dashboard snapshot
+GET {{baseUrl}}/dashboard/api/snapshot
+Authorization: Bearer {{apiKey}}
+
+### Add an authoritative source
+POST {{baseUrl}}/dashboard/api/sources
+Authorization: Bearer {{apiKey}}
+Content-Type: application/json
+
+{
+  "pattern": "https://learn.microsoft.com/dotnet/*",
+  "enabled": true
+}
+
+### Add an explicit skill
+POST {{baseUrl}}/dashboard/api/skills
+Authorization: Bearer {{apiKey}}
+Content-Type: application/json
+
+{
+  "name": "example",
+  "path": "/absolute/path/to/SKILL.md",
+  "description": "Example local skill",
+  "enabled": true
+}
+
+### Add and probe a Streamable HTTP MCP server
+POST {{baseUrl}}/dashboard/api/mcp-servers
+Authorization: Bearer {{apiKey}}
+Content-Type: application/json
+
+{
+  "name": "example",
+  "endpoint": "https://mcp.example.com/mcp"
+}
+
+### Clear response cache
+DELETE {{baseUrl}}/dashboard/api/cache
+Authorization: Bearer {{apiKey}}

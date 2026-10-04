@@ -54,12 +54,14 @@ public sealed class DashboardActivity : IRouteRecorder
             Timestamp: DateTime.UtcNow,
             Route: decision.Route.ToString(),
             ModelId: decision.ModelId,
+            ProviderRouteId: decision.ProviderRouteId,
             Backend: decision.Backend.ToString(),
             IsBillable: decision.IsBillable,
             IsFallback: decision.IsFallback,
             Succeeded: usage.Succeeded,
             TimeToFirstTokenMs: usage.TimeToFirstToken.TotalMilliseconds,
             TotalDurationMs: usage.TotalDuration.TotalMilliseconds,
+            InputTokens: usage.InputTokens,
             OutputTokens: usage.OutputTokens,
             DecodeTokensPerSecond: usage.DecodeTokensPerSecond
         );

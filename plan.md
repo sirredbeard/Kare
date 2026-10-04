@@ -503,7 +503,7 @@ The first dashboard surface should show:
 
 Dashboard state should be bounded and process-local until PostgreSQL persistence is designed. The page and API should remain behind Kare's network allow-list. Dashboard data endpoints should require the configured bearer token. Repository defaults must remain loopback-only and must not contain a development password or API key.
 
-The first implementation may show empty routing URL, skill, and MCP sections until those registries have service-owned data sources. Do not scan arbitrary home directories or copy Copilot settings into Kare to populate them.
+Kare now owns bounded registries for authoritative HTTPS source patterns, explicit local skill files, and Streamable HTTP MCP endpoints. Source patterns are periodically crawled with fixed page, byte, and injected-context limits. Enabled source and skill content is added only to local inference. MCP status comes from Kare's own initialize probes. Kare does not scan arbitrary home directories or copy Copilot settings to populate these registries.
 
 ## Persistence and context memory
 

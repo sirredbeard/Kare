@@ -18,15 +18,20 @@ public sealed class ResponseCache : IDisposable
     private readonly ResponseCacheOptions _options;
     private readonly MemoryCache _cache;
     private readonly IDashboardMetricsCollector? _dashboard;
+    private readonly IDashboardKnowledgeService? _knowledge;
+    private readonly Lock _keysSync = new();
+    private readonly HashSet<string> _keys = new(StringComparer.Ordinal);
 
     /// <summary>Creates the cache.</summary>
     public ResponseCache(
         IOptions<ResponseCacheOptions> options,
-        IDashboardMetricsCollector? dashboard = null)
+        IDashboardMetricsCollector? dashboard = null,
+        IDashboardKnowledgeService? knowledge = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value;
         _dashboard = dashboard;
+        _knowledge = knowledge;
         _cache = new MemoryCache(new MemoryCacheOptions
         {
             SizeLimit = _options.MaxEntries,
@@ -48,6 +53,11 @@ public sealed class ResponseCache : IDisposable
 
         if (!_cache.TryGetValue(key, out response))
         {
+            lock (_keysSync)
+            {
+                _keys.Remove(key);
+            }
+
             _dashboard?.RemoveCacheEntry(key);
             return false;
         }
@@ -86,6 +96,11 @@ public sealed class ResponseCache : IDisposable
                 Size = 1,
             });
 
+        lock (_keysSync)
+        {
+            _keys.Add(key);
+        }
+
         _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
             key,
             DateTime.UtcNow,
@@ -99,7 +114,29 @@ public sealed class ResponseCache : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         _cache.Remove(key);
+        lock (_keysSync)
+        {
+            _keys.Remove(key);
+        }
+
         _dashboard?.RemoveCacheEntry(key);
+    }
+
+    /// <summary>Removes every response currently tracked by the bounded cache.</summary>
+    public void Clear()
+    {
+        string[] keys;
+        lock (_keysSync)
+        {
+            keys = [.. _keys];
+            _keys.Clear();
+        }
+
+        foreach (var key in keys)
+        {
+            _cache.Remove(key);
+            _dashboard?.RemoveCacheEntry(key);
+        }
     }
 
     /// <inheritdoc />
@@ -122,6 +159,7 @@ public sealed class ResponseCache : IDisposable
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Append(hash, CacheVersion);
+        Append(hash, _knowledge?.ContextVersion);
         Append(hash, options.ModelId);
         Append(hash, options.Temperature);
         Append(hash, options.TopP);

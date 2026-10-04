@@ -9,19 +9,32 @@ public static class DashboardEndpoints
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        builder.MapGet("/dashboard", static (HttpContext context) =>
-        {
-            context.Response.Headers.CacheControl = "no-store";
-            context.Response.Headers.ContentSecurityPolicy =
-                "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'";
-            context.Response.Headers.XContentTypeOptions = "nosniff";
-            return Results.Content(Page, "text/html; charset=utf-8");
-        });
+        builder.MapGet(
+            "/dashboard",
+            static (HttpContext context, IDashboardAuthenticationService authentication) =>
+            {
+                if (!authentication.IsAuthorized(context) &&
+                    authentication.CanAutomaticallyAuthorize(context))
+                {
+                    authentication.EstablishSession(context);
+                }
 
-        builder.MapGet("/dashboard/api/snapshot", static (IDashboardMetricsCollector collector) =>
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.ContentSecurityPolicy =
+                    "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'";
+                context.Response.Headers.XContentTypeOptions = "nosniff";
+                return Results.Content(Page, "text/html; charset=utf-8");
+            });
+
+        builder.MapGet(
+            "/dashboard/api/snapshot",
+            static (IDashboardMetricsCollector collector, IModelEndpointProvider endpointProvider) =>
         {
+            var modelUsage = collector.GetModelUsage();
             var snapshot = new DashboardMetrics.Snapshot(
                 DateTime.UtcNow,
+                endpointProvider.GetEndpoints(modelUsage),
+                modelUsage,
                 collector.GetRequests(),
                 collector.GetActivities(),
                 collector.GetCacheEntries(),
@@ -32,6 +45,27 @@ public static class DashboardEndpoints
 
             return Results.Json(snapshot, DashboardJsonContext.Default.Snapshot);
         });
+
+        builder.MapPost(
+            "/dashboard/api/session",
+            static (DashboardLoginRequest request, HttpContext context, IDashboardAuthenticationService authentication) =>
+            {
+                if (!authentication.IsApiKeyValid(request.ApiKey))
+                {
+                    return Results.Unauthorized();
+                }
+
+                authentication.EstablishSession(context);
+                return Results.NoContent();
+            });
+
+        builder.MapDelete(
+            "/dashboard/api/session",
+            static (HttpContext context, IDashboardAuthenticationService authentication) =>
+            {
+                authentication.ClearSession(context);
+                return Results.NoContent();
+            });
 
         builder.MapDelete(
             "/dashboard/api/cache/{key}",
@@ -45,6 +79,120 @@ public static class DashboardEndpoints
                 cache.Remove(key);
                 return Results.NoContent();
             });
+
+        builder.MapDelete(
+            "/dashboard/api/cache",
+            static (ResponseCache cache) =>
+            {
+                cache.Clear();
+                return Results.NoContent();
+            });
+
+        builder.MapPost(
+            "/dashboard/api/sources",
+            static async Task<IResult> (
+                CreateAuthoritativeSourceRequest request,
+                IDashboardKnowledgeService knowledge,
+                CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    var source = await knowledge
+                        .AddSourceAsync(request, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Created($"/dashboard/api/sources/{source.Id}", source);
+                }
+                catch (ArgumentException)
+                {
+                    return Results.BadRequest();
+                }
+                catch (InvalidOperationException)
+                {
+                    return Results.Conflict();
+                }
+            });
+
+        builder.MapDelete(
+            "/dashboard/api/sources/{id}",
+            static async Task<IResult> (
+                string id,
+                IDashboardKnowledgeService knowledge,
+                CancellationToken cancellationToken) =>
+                await knowledge.RemoveSourceAsync(id, cancellationToken).ConfigureAwait(false)
+                    ? Results.NoContent()
+                    : Results.NotFound());
+
+        builder.MapPost(
+            "/dashboard/api/skills",
+            static async Task<IResult> (
+                CreateDashboardSkillRequest request,
+                IDashboardKnowledgeService knowledge,
+                CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    var skill = await knowledge
+                        .AddSkillAsync(request, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Created(
+                        $"/dashboard/api/skills/{Uri.EscapeDataString(skill.Name)}",
+                        skill);
+                }
+                catch (ArgumentException)
+                {
+                    return Results.BadRequest();
+                }
+                catch (InvalidOperationException)
+                {
+                    return Results.Conflict();
+                }
+            });
+
+        builder.MapDelete(
+            "/dashboard/api/skills/{name}",
+            static async Task<IResult> (
+                string name,
+                IDashboardKnowledgeService knowledge,
+                CancellationToken cancellationToken) =>
+                await knowledge.RemoveSkillAsync(name, cancellationToken).ConfigureAwait(false)
+                    ? Results.NoContent()
+                    : Results.NotFound());
+
+        builder.MapPost(
+            "/dashboard/api/mcp-servers",
+            static async Task<IResult> (
+                CreateDashboardMcpServerRequest request,
+                IDashboardKnowledgeService knowledge,
+                CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    var server = await knowledge
+                        .AddMcpServerAsync(request, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Created(
+                        $"/dashboard/api/mcp-servers/{Uri.EscapeDataString(server.Name)}",
+                        server);
+                }
+                catch (ArgumentException)
+                {
+                    return Results.BadRequest();
+                }
+                catch (InvalidOperationException)
+                {
+                    return Results.Conflict();
+                }
+            });
+
+        builder.MapDelete(
+            "/dashboard/api/mcp-servers/{name}",
+            static async Task<IResult> (
+                string name,
+                IDashboardKnowledgeService knowledge,
+                CancellationToken cancellationToken) =>
+                await knowledge.RemoveMcpServerAsync(name, cancellationToken).ConfigureAwait(false)
+                    ? Results.NoContent()
+                    : Results.NotFound());
 
         return builder;
     }
@@ -83,6 +231,10 @@ public static class DashboardEndpoints
             h2 { margin: 0 0 14px; font: 650 16px/1.2 system-ui, sans-serif; }
             p { margin: 6px 0 0; color: var(--muted); }
             .auth { display: flex; gap: 8px; }
+            .hidden { display: none !important; }
+            .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+            .form-row { display: flex; gap: 8px; margin-bottom: 12px; }
+            .form-row input { min-width: 0; flex: 1; }
             input, button {
               border: 1px solid var(--line);
               border-radius: 7px;
@@ -120,6 +272,7 @@ public static class DashboardEndpoints
             .muted { color: var(--muted); }
             .empty { padding: 24px 10px; color: var(--muted); text-align: center; }
             .delete { padding: 4px 7px; color: var(--red); }
+            .danger { color: var(--red); }
             footer { padding: 18px 0 32px; color: var(--muted); }
             @media (max-width: 900px) {
               .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -141,7 +294,8 @@ public static class DashboardEndpoints
             </div>
             <div class="auth">
               <input id="token" type="password" autocomplete="off" placeholder="API key, if configured">
-              <button id="save-token" type="button">Apply</button>
+              <button id="login" type="button">Sign in</button>
+              <button id="logout" class="hidden" type="button">Sign out</button>
               <button id="refresh" type="button">Refresh</button>
             </div>
           </header>
@@ -159,6 +313,20 @@ public static class DashboardEndpoints
 
             <section class="grid section">
               <article class="card full">
+                <h2>Model endpoints</h2>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>ID</th><th>Provider</th><th>Model</th><th>Wire model</th><th>Endpoint</th><th>Tier</th><th>Tools</th><th>Requests</th><th>Input tokens</th><th>Output tokens</th><th>Last used</th></tr></thead>
+                  <tbody id="model-endpoints"></tbody>
+                </table></div>
+              </article>
+              <article class="card full">
+                <h2>Usage by model</h2>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>Model</th><th>Backend</th><th>Route</th><th>Requests</th><th>Success</th><th>Billable</th><th>Fallbacks</th><th>Input tokens</th><th>Output tokens</th><th>Avg TTFT</th><th>Avg total</th><th>Avg tok/s</th></tr></thead>
+                  <tbody id="models"></tbody>
+                </table></div>
+              </article>
+              <article class="card full">
                 <h2>Recent requests</h2>
                 <div class="table-wrap"><table>
                   <thead><tr><th>Time</th><th>Route</th><th>Model</th><th>Backend</th><th>Status</th><th>TTFT</th><th>Total</th><th>Tokens</th><th>tok/s</th></tr></thead>
@@ -173,30 +341,48 @@ public static class DashboardEndpoints
                 </table></div>
               </article>
               <article class="card wide">
-                <h2>Cache</h2>
+                <div class="section-head">
+                  <h2>Cache</h2>
+                  <button id="clear-cache" class="danger" type="button">Delete all</button>
+                </div>
                 <div class="table-wrap"><table>
                   <thead><tr><th>Key</th><th>Created</th><th>Last used</th><th>Size</th><th></th></tr></thead>
                   <tbody id="cache"></tbody>
                 </table></div>
               </article>
-              <article class="card wide">
-                <h2>Routing decision URLs</h2>
+              <article class="card full">
+                <h2>Authoritative sources</h2>
+                <div class="form-row">
+                  <input id="source-pattern" type="url" placeholder="https://docs.example.com/*">
+                  <button id="add-source" type="button">Add and crawl</button>
+                </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>URL</th><th>Preference</th><th>Modified</th></tr></thead>
+                  <thead><tr><th>Pattern</th><th>Status</th><th>Pages</th><th>Characters</th><th>Last crawled</th><th>Error</th><th></th></tr></thead>
                   <tbody id="routes"></tbody>
                 </table></div>
               </article>
-              <article class="card wide">
+              <article class="card full">
                 <h2>Local skills</h2>
+                <div class="form-row">
+                  <input id="skill-name" type="text" placeholder="Skill name">
+                  <input id="skill-path" type="text" placeholder="/absolute/path/to/SKILL.md">
+                  <input id="skill-description" type="text" placeholder="Description">
+                  <button id="add-skill" type="button">Add skill</button>
+                </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Name</th><th>Description</th><th>Path</th><th>Modified</th></tr></thead>
+                  <thead><tr><th>Name</th><th>Description</th><th>Path</th><th>Status</th><th>Size</th><th>Modified</th><th></th></tr></thead>
                   <tbody id="skills"></tbody>
                 </table></div>
               </article>
               <article class="card full">
                 <h2>MCP servers</h2>
+                <div class="form-row">
+                  <input id="mcp-name" type="text" placeholder="Server name">
+                  <input id="mcp-endpoint" type="url" placeholder="https://mcp.example.com/mcp">
+                  <button id="add-mcp" type="button">Add and probe</button>
+                </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Name</th><th>Endpoint</th><th>Capabilities</th><th>Status</th><th>Last connected</th></tr></thead>
+                  <thead><tr><th>Name</th><th>Endpoint</th><th>Capabilities</th><th>Status</th><th>Last checked</th><th>Error</th><th></th></tr></thead>
                   <tbody id="mcp"></tbody>
                 </table></div>
               </article>
@@ -205,8 +391,6 @@ public static class DashboardEndpoints
           </main>
           <script>
             const tokenInput = document.querySelector('#token');
-            const savedToken = sessionStorage.getItem('kare-dashboard-token') || '';
-            tokenInput.value = savedToken;
 
             const escapeHtml = value => String(value ?? '')
               .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
@@ -215,11 +399,6 @@ public static class DashboardEndpoints
             const time = value => value ? new Date(value).toLocaleString() : 'n/a';
             const number = (value, suffix = '') => value == null ? 'n/a' : `${Number(value).toFixed(1)}${suffix}`;
             const empty = columns => `<tr><td class="empty" colspan="${columns}">No data yet.</td></tr>`;
-            const headers = () => {
-              const token = sessionStorage.getItem('kare-dashboard-token');
-              return token ? { Authorization: `Bearer ${token}` } : {};
-            };
-
             function render(snapshot) {
               const requests = snapshot.requests || [];
               const successful = requests.filter(item => item.succeeded).length;
@@ -227,7 +406,8 @@ public static class DashboardEndpoints
               const local = requests.filter(item => !item.isBillable && item.route !== 'Cache').length;
               const billable = requests.filter(item => item.isBillable).length;
 
-              document.querySelector('#requests-total').textContent = requests.length;
+              document.querySelector('#requests-total').textContent =
+                snapshot.workload?.totalRequestsProcessed ?? requests.length;
               document.querySelector('#success-rate').textContent =
                 requests.length ? `${(successful / requests.length * 100).toFixed(1)}%` : 'n/a';
               document.querySelector('#average-ttft').textContent =
@@ -238,6 +418,31 @@ public static class DashboardEndpoints
               document.querySelector('#active-requests').textContent = snapshot.workload?.activeRequests ?? 0;
               document.querySelector('#local-routes').textContent = local;
               document.querySelector('#billable-routes').textContent = billable;
+
+              const endpoints = snapshot.modelEndpoints || [];
+              document.querySelector('#model-endpoints').innerHTML = endpoints.length ? endpoints.map(item => `
+                <tr>
+                  <td>${escapeHtml(item.id)}</td><td>${escapeHtml(item.provider)}</td>
+                  <td>${escapeHtml(item.modelId)}</td><td>${escapeHtml(item.wireModel ?? 'n/a')}</td>
+                  <td>${escapeHtml(item.endpoint)}</td><td>${escapeHtml(item.tier)}</td>
+                  <td>${item.supportsTools ? 'yes' : 'no'}</td><td>${escapeHtml(item.requestCount)}</td>
+                  <td>${escapeHtml(item.inputTokens)}</td><td>${escapeHtml(item.outputTokens)}</td>
+                  <td>${escapeHtml(time(item.lastUsedAt))}</td>
+                </tr>`).join('') : empty(11);
+
+              const models = snapshot.modelUsage || [];
+              document.querySelector('#models').innerHTML = models.length ? models.map(item => `
+                <tr>
+                  <td>${escapeHtml(item.modelId)}</td><td>${escapeHtml(item.backend)}</td>
+                  <td><span class="tag">${escapeHtml(item.route)}</span></td>
+                  <td>${escapeHtml(item.requestCount)}</td>
+                  <td>${escapeHtml(item.successfulRequests)} / ${escapeHtml(item.failedRequests)} failed</td>
+                  <td>${escapeHtml(item.billableRequests)}</td><td>${escapeHtml(item.fallbackRequests)}</td>
+                  <td>${escapeHtml(item.inputTokens)}</td><td>${escapeHtml(item.outputTokens)}</td>
+                  <td>${escapeHtml(number(item.averageTimeToFirstTokenMs, ' ms'))}</td>
+                  <td>${escapeHtml(number(item.averageTotalDurationMs, ' ms'))}</td>
+                  <td>${escapeHtml(number(item.averageDecodeTokensPerSecond))}</td>
+                </tr>`).join('') : empty(12);
 
               document.querySelector('#requests').innerHTML = requests.length ? requests.map(item => `
                 <tr>
@@ -266,20 +471,27 @@ public static class DashboardEndpoints
 
               const routes = snapshot.routingDecisionUrls || [];
               document.querySelector('#routes').innerHTML = routes.length ? routes.map(item => `
-                <tr><td>${escapeHtml(item.url)}</td><td>${item.preferLocal ? 'local' : 'cloud'}</td>
-                <td>${escapeHtml(time(item.lastModifiedAt))}</td></tr>`).join('') : empty(3);
+                <tr><td>${escapeHtml(item.pattern)}</td>
+                <td class="${item.status === 'ready' ? 'good' : item.status === 'failed' ? 'bad' : ''}">${escapeHtml(item.status)}</td>
+                <td>${escapeHtml(item.pageCount)}</td><td>${escapeHtml(item.contentCharacters)}</td>
+                <td>${escapeHtml(time(item.lastCrawledAt))}</td><td>${escapeHtml(item.error ?? '')}</td>
+                <td><button class="delete" data-source-id="${escapeHtml(item.id)}">Delete</button></td></tr>`).join('') : empty(7);
 
               const skills = snapshot.skills || [];
               document.querySelector('#skills').innerHTML = skills.length ? skills.map(item => `
                 <tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.description)}</td>
-                <td>${escapeHtml(item.path)}</td><td>${escapeHtml(time(item.lastModifiedAt))}</td></tr>`).join('') : empty(4);
+                <td>${escapeHtml(item.path)}</td>
+                <td class="${item.status === 'ready' ? 'good' : 'bad'}">${escapeHtml(item.status)}</td>
+                <td>${escapeHtml(item.sizeBytes)} B</td><td>${escapeHtml(time(item.lastModifiedAt))}</td>
+                <td><button class="delete" data-skill-name="${escapeHtml(item.name)}">Delete</button></td></tr>`).join('') : empty(7);
 
               const servers = snapshot.mcpServers || [];
               document.querySelector('#mcp').innerHTML = servers.length ? servers.map(item => `
                 <tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.endpoint)}</td>
                 <td>${escapeHtml((item.capabilities || []).join(', '))}</td>
                 <td class="${item.connected ? 'good' : 'bad'}">${item.connected ? 'connected' : 'disconnected'}</td>
-                <td>${escapeHtml(time(item.lastConnectedAt))}</td></tr>`).join('') : empty(5);
+                <td>${escapeHtml(time(item.lastCheckedAt))}</td><td>${escapeHtml(item.error ?? '')}</td>
+                <td><button class="delete" data-mcp-name="${escapeHtml(item.name)}">Delete</button></td></tr>`).join('') : empty(7);
 
               document.querySelector('#generated').textContent = `Updated ${time(snapshot.generatedAt)}. Refreshes every 5 seconds.`;
             }
@@ -288,22 +500,43 @@ public static class DashboardEndpoints
               const dot = document.querySelector('#dot');
               const connection = document.querySelector('#connection');
               try {
-                const response = await fetch('/dashboard/api/snapshot', { headers: headers(), cache: 'no-store' });
+                const response = await fetch('/dashboard/api/snapshot', { cache: 'no-store' });
                 if (response.status === 401) throw new Error('API key required');
                 if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
                 render(await response.json());
                 dot.className = 'dot ok';
                 connection.textContent = 'Connected';
+                tokenInput.classList.add('hidden');
+                document.querySelector('#login').classList.add('hidden');
+                document.querySelector('#logout').classList.remove('hidden');
               } catch (error) {
                 dot.className = 'dot error';
                 connection.textContent = error.message;
+                if (error.message === 'API key required') {
+                  tokenInput.classList.remove('hidden');
+                  document.querySelector('#login').classList.remove('hidden');
+                  document.querySelector('#logout').classList.add('hidden');
+                }
               }
             }
 
-            document.querySelector('#save-token').addEventListener('click', () => {
+            document.querySelector('#login').addEventListener('click', async () => {
               const token = tokenInput.value.trim();
-              if (token) sessionStorage.setItem('kare-dashboard-token', token);
-              else sessionStorage.removeItem('kare-dashboard-token');
+              if (!token) return;
+              const response = await fetch('/dashboard/api/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ apiKey: token })
+              });
+              tokenInput.value = '';
+              if (!response.ok) {
+                document.querySelector('#connection').textContent = 'Invalid API key';
+                return;
+              }
+              refresh();
+            });
+            document.querySelector('#logout').addEventListener('click', async () => {
+              await fetch('/dashboard/api/session', { method: 'DELETE' });
               refresh();
             });
             document.querySelector('#refresh').addEventListener('click', refresh);
@@ -311,10 +544,86 @@ public static class DashboardEndpoints
               const key = event.target.dataset.cacheKey;
               if (!key) return;
               const response = await fetch(`/dashboard/api/cache/${encodeURIComponent(key)}`, {
-                method: 'DELETE', headers: headers()
+                method: 'DELETE'
               });
               if (response.ok) refresh();
             });
+            document.querySelector('#clear-cache').addEventListener('click', async () => {
+              if (!confirm('Delete every cached response?')) return;
+              const response = await fetch('/dashboard/api/cache', { method: 'DELETE' });
+              if (response.ok) refresh();
+            });
+            document.querySelector('#add-source').addEventListener('click', async () => {
+              const input = document.querySelector('#source-pattern');
+              const response = await postJson('/dashboard/api/sources', {
+                pattern: input.value.trim(), enabled: true
+              });
+              if (response.ok) {
+                input.value = '';
+                refresh();
+              }
+            });
+            document.querySelector('#routes').addEventListener('click', async event => {
+              const id = event.target.dataset.sourceId;
+              if (!id) return;
+              const response = await fetch(`/dashboard/api/sources/${encodeURIComponent(id)}`, {
+                method: 'DELETE'
+              });
+              if (response.ok) refresh();
+            });
+            document.querySelector('#add-skill').addEventListener('click', async () => {
+              const name = document.querySelector('#skill-name');
+              const path = document.querySelector('#skill-path');
+              const description = document.querySelector('#skill-description');
+              const response = await postJson('/dashboard/api/skills', {
+                name: name.value.trim(),
+                path: path.value.trim(),
+                description: description.value.trim(),
+                enabled: true
+              });
+              if (response.ok) {
+                name.value = '';
+                path.value = '';
+                description.value = '';
+                refresh();
+              }
+            });
+            document.querySelector('#skills').addEventListener('click', async event => {
+              const name = event.target.dataset.skillName;
+              if (!name) return;
+              const response = await fetch(`/dashboard/api/skills/${encodeURIComponent(name)}`, {
+                method: 'DELETE'
+              });
+              if (response.ok) refresh();
+            });
+            document.querySelector('#add-mcp').addEventListener('click', async () => {
+              const name = document.querySelector('#mcp-name');
+              const endpoint = document.querySelector('#mcp-endpoint');
+              const response = await postJson('/dashboard/api/mcp-servers', {
+                name: name.value.trim(), endpoint: endpoint.value.trim()
+              });
+              if (response.ok) {
+                name.value = '';
+                endpoint.value = '';
+                refresh();
+              }
+            });
+            document.querySelector('#mcp').addEventListener('click', async event => {
+              const name = event.target.dataset.mcpName;
+              if (!name) return;
+              const response = await fetch(`/dashboard/api/mcp-servers/${encodeURIComponent(name)}`, {
+                method: 'DELETE'
+              });
+              if (response.ok) refresh();
+            });
+
+            function postJson(url, value) {
+              return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(value)
+              });
+            }
 
             refresh();
             setInterval(refresh, 5000);

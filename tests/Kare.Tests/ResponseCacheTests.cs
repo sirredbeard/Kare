@@ -64,6 +64,30 @@ public sealed class ResponseCacheTests
         Assert.False(cache.TryGet(messages, options, streaming: false, out _));
     }
 
+    [Fact]
+    public void ClearRemovesEveryTrackedResponse()
+    {
+        var dashboard = new InMemoryMetricsCollector();
+        using var cache = CreateCache(dashboard);
+        var options = new ChatOptions { ModelId = "kare-local", Temperature = 0 };
+
+        cache.Set(
+            [new ChatMessage(ChatRole.User, "first")],
+            options,
+            streaming: false,
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "one")));
+        cache.Set(
+            [new ChatMessage(ChatRole.User, "second")],
+            options,
+            streaming: false,
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "two")));
+
+        Assert.Equal(2, dashboard.GetCacheEntries().Count);
+        cache.Clear();
+
+        Assert.Empty(dashboard.GetCacheEntries());
+    }
+
     private static ResponseCache CreateCache(IDashboardMetricsCollector? dashboard = null) =>
         new(Options.Create(new ResponseCacheOptions
         {

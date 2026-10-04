@@ -65,9 +65,11 @@ The JIT and AOT modes deploy to separate versioned release directories and updat
 
 ## Operations dashboard
 
-Kare serves a local dashboard at `http://127.0.0.1:5285/dashboard`. It shows recent route decisions, first-token and total latency, decode rate, fallback and billable routes, inference workload, response-cache metadata, routing URLs, local skills, and MCP server state. The dashboard stores metadata only. It does not store prompts or generated responses.
+Kare serves a local dashboard at `http://127.0.0.1:5285/dashboard`. It shows recent route decisions, first-token and total latency, decode rate, fallback and billable routes, per-model token usage, configured local and cloud endpoints, inference workload, response-cache metadata, authoritative web sources, local skills, and MCP server state. The dashboard stores metadata only. It does not store prompts or generated responses.
 
-The dashboard API uses the same bearer token as `/v1` when `Kare:Service:ApiKey` is configured. Enter the key in the page. It remains in browser session storage and is not written to the repository. Keep the service loopback-only and use the existing SSH tunnel unless a protected non-loopback configuration has been reviewed.
+The dashboard API uses the same API key as `/v1` when `Kare:Service:ApiKey` is configured. Access through the SSH tunnel receives a process-local HttpOnly dashboard session automatically because the device sees an authenticated loopback connection. Direct LAN access requires the key once, then replaces it with an HttpOnly session cookie. The API key is never embedded in the page or stored in browser JavaScript storage.
+
+Dashboard controls can delete individual cache entries or clear the response cache, add and remove explicit skill files, add and remove HTTPS wildcard source patterns, and add and probe Streamable HTTP MCP endpoints. Source patterns are crawled every 15 minutes with fixed page and content limits. Successfully crawled content and enabled skill files are added only to local inference. Registry configuration is stored outside the repository under the service account's local application data directory.
 
 
 ## Related projects

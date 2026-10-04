@@ -12,10 +12,14 @@ public interface IDashboardMetricsCollector
     void RemoveCacheEntry(string key);
     void UpdateWorkload(DashboardMetrics.WorkloadSnapshot workload);
     void RegisterRoutingDecisionUrl(DashboardMetrics.RoutingDecisionUrl url);
+    void RemoveRoutingDecisionUrl(string id);
     void RegisterSkill(DashboardMetrics.SkillInfo skill);
+    void RemoveSkill(string name);
     void RegisterMcpServer(DashboardMetrics.McpServerInfo server);
+    void RemoveMcpServer(string name);
 
     IReadOnlyList<DashboardMetrics.RequestMetric> GetRequests();
+    IReadOnlyList<DashboardMetrics.ModelUsage> GetModelUsage();
     IReadOnlyList<DashboardMetrics.Activity> GetActivities();
     IReadOnlyList<DashboardMetrics.CacheEntry> GetCacheEntries();
     DashboardMetrics.WorkloadSnapshot? GetWorkload();
