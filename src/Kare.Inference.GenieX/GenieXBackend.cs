@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.ClientModel;
 using System.ClientModel.Primitives;
+using System.Text.Json;
 using Kare.Abstractions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -14,6 +15,9 @@ namespace Kare.Inference.GenieX;
 /// </summary>
 public sealed class GenieXBackend : ILocalInferenceBackend
 {
+    /// <summary>Chat option key for disabling model reasoning on a bounded request.</summary>
+    public const string DisableThinkingOptionName = "kare.geniex.disable-thinking";
+
     private readonly GenieXOptions _options;
     private readonly HttpClient _probeClient;
     private readonly Lazy<IChatClient> _client;
@@ -104,11 +108,22 @@ public sealed class GenieXBackend : ILocalInferenceBackend
     {
         try
         {
+            if (options?.AdditionalProperties?.TryGetValue(
+                    DisableThinkingOptionName,
+                    out var disableThinking) == true &&
+                disableThinking is true)
+            {
+                return await GetNonThinkingResponseAsync(
+                    messages,
+                    options,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             return await _client.Value
                 .GetResponseAsync(messages, NormalizeOptions(options), cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is HttpRequestException or ClientResultException)
+        catch (Exception ex) when (ex is HttpRequestException or ClientResultException or JsonException)
         {
             throw BackendUnavailable(ex);
         }
@@ -165,6 +180,63 @@ public sealed class GenieXBackend : ILocalInferenceBackend
         options.ModelId = _options.ModelId;
         options.Temperature ??= 0;
         return options;
+    }
+
+    private async Task<ChatResponse> GetNonThinkingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions options,
+        CancellationToken cancellationToken)
+    {
+        var request = new GenieXCompletionRequest
+        {
+            Model = _options.ModelId,
+            MaxTokens = options.MaxOutputTokens ?? 256,
+            Temperature = options.Temperature ?? 0,
+            Stream = false,
+            EnableThink = false,
+            Messages =
+            [
+                .. messages.Select(static message => new GenieXCompletionMessage
+                {
+                    Role = message.Role.Value,
+                    Content = string.Join(
+                        "\n",
+                        message.Contents
+                            .OfType<TextContent>()
+                            .Select(static content => content.Text)),
+                }),
+            ],
+        };
+
+        using var httpResponse = await _probeClient.PostAsJsonAsync(
+            new Uri($"{_options.Endpoint.ToString().TrimEnd('/')}/chat/completions"),
+            request,
+            GenieXJsonContext.Default.GenieXCompletionRequest,
+            cancellationToken).ConfigureAwait(false);
+        httpResponse.EnsureSuccessStatusCode();
+        var response = await httpResponse.Content.ReadFromJsonAsync(
+            GenieXJsonContext.Default.GenieXCompletionResponse,
+            cancellationToken).ConfigureAwait(false);
+        var choice = response?.Choices.FirstOrDefault() ??
+            throw new HttpRequestException("GenieX returned no completion choice.");
+
+        return new ChatResponse(new ChatMessage(ChatRole.Assistant, choice.Message.Content))
+        {
+            FinishReason = choice.FinishReason switch
+            {
+                "length" => ChatFinishReason.Length,
+                "tool_calls" => ChatFinishReason.ToolCalls,
+                _ => ChatFinishReason.Stop,
+            },
+            Usage = response.Usage is null
+                ? null
+                : new UsageDetails
+                {
+                    InputTokenCount = response.Usage.PromptTokens,
+                    OutputTokenCount = response.Usage.CompletionTokens,
+                    TotalTokenCount = response.Usage.TotalTokens,
+                },
+        };
     }
 
     private async IAsyncEnumerable<ChatResponseUpdate> StreamAsync(

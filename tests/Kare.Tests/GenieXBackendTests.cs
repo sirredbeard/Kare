@@ -50,6 +50,29 @@ public sealed class GenieXBackendTests
     }
 
     [Fact]
+    public async Task CascadeGateDisablesThinkingWithoutSdkRetries()
+    {
+        var handler = new GenieXHandler();
+        using var backend = CreateBackend(handler);
+
+        var response = await backend.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "route this")],
+            new ChatOptions
+            {
+                MaxOutputTokens = 64,
+                AdditionalProperties = new()
+                {
+                    [GenieXBackend.DisableThinkingOptionName] = true,
+                },
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("ready", response.Text);
+        Assert.Equal(1, handler.CompletionRequests);
+        Assert.False(handler.LastEnableThink);
+    }
+
+    [Fact]
     public async Task StreamingFailureReportsBackendUnavailable()
     {
         using var backend = CreateBackend(
@@ -106,6 +129,8 @@ public sealed class GenieXBackendTests
     {
         public int CompletionRequests { get; private set; }
 
+        public bool? LastEnableThink { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -123,6 +148,11 @@ public sealed class GenieXBackendTests
                 "http://127.0.0.1:18181/v1/chat/completions",
                 request.RequestUri?.AbsoluteUri);
             CompletionRequests++;
+            var requestBody = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
+            if (requestBody?.Contains("\"enable_think\":false", StringComparison.Ordinal) == true)
+            {
+                LastEnableThink = false;
+            }
 
             if (completionStatus != HttpStatusCode.OK)
             {

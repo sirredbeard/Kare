@@ -3,6 +3,7 @@ using Kare.Abstractions;
 using Kare.Core;
 using Kare.Core.Inference;
 using Kare.Core.Options;
+using Kare.Inference.GenieX;
 using Kare.Service.Cache;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -217,6 +218,10 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             Temperature = 0,
             MaxOutputTokens = _options.CascadeDecisionMaxOutputTokens,
             ToolMode = ChatToolMode.None,
+            AdditionalProperties = new()
+            {
+                [GenieXBackend.DisableThinkingOptionName] = true,
+            },
         };
 
         try

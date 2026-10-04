@@ -40,7 +40,7 @@ On the device, protected configuration binds Kare to the trusted LAN and limits 
 ~/.config/kare/copilot-byok.sh
 ```
 
-The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. The OpenAI-compatible `/v1` API still requires the configured bearer key. Kare advertises one public model, `kare`. Each request follows one bounded policy: cached cloud target, compact tool-free Qwen decision, then ordered cloud escalation. Tool-bearing requests are limited to catalog entries that explicitly support caller-owned tools. Kare does not send Copilot's full tool-heavy request to GenieX.
+The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. The OpenAI-compatible `/v1` API still requires the configured bearer key. Kare advertises one public model, `kare`. Each request follows one bounded policy: cached cloud target, compact tool-free Qwen decision, then ordered cloud escalation. The GenieX gate disables extended model thinking so the answer-or-route marker fits its small latency and output budget. Tool-bearing requests are limited to catalog entries that explicitly support caller-owned tools. Kare does not send Copilot's full tool-heavy request to GenieX.
 
 ## Device iteration
 
