@@ -8,6 +8,7 @@ using Kare.Inference.OnnxGenAI;
 using Kare.Service;
 using Kare.Service.Api;
 using Kare.Service.Cache;
+using Kare.Service.Dashboard;
 using Kare.Service.Options;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.AI;
@@ -76,6 +77,7 @@ builder.Services.AddSingleton<InferenceGate>();
 builder.Services.AddSingleton<IRouteRecorder, MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
 builder.Services.AddSingleton<ResponseCache>();
+builder.Services.AddSingleton<IDashboardMetricsCollector, InMemoryMetricsCollector>();
 builder.Services.AddSingleton<CopilotSdkBackend>();
 builder.Services.AddSingleton<ICloudInferenceBackend>(sp => sp.GetRequiredService<CopilotSdkBackend>());
 builder.Services.AddSingleton<ICloudModelCatalog>(sp => sp.GetRequiredService<CopilotSdkBackend>());
@@ -135,6 +137,7 @@ GuardBinding(app, serviceOptions);
 app.UseMiddleware<NetworkAllowListMiddleware>();
 app.UseMiddleware<ApiKeyMiddleware>();
 app.MapGet("/health", () => Results.Ok("ok"));
+app.MapDashboard();
 app.MapOpenAiCompatibleApi();
 
 // Backend selection runs before the listener opens. Kare should fail to start rather than
