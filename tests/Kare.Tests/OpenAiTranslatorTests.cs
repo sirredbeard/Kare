@@ -132,6 +132,7 @@ public sealed class OpenAiTranslatorTests
         Assert.Equal("run_tests", declaration.Name);
         Assert.Equal("Runs tests", declaration.Description);
         Assert.Equal(JsonValueKind.Object, declaration.JsonSchema.ValueKind);
+        Assert.True(declaration.AdditionalProperties!["is_override"] is true);
 
         // A declaration is not an invocable function. Kare must never run a caller's tool.
         Assert.IsNotType<AIFunction>(tool, exactMatch: false);

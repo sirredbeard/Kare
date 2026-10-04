@@ -34,4 +34,12 @@ internal sealed class PassthroughFunctionDeclaration : AIFunctionDeclaration
     public override string Description => _description;
 
     public override JsonElement JsonSchema => _schema;
+
+    /// <summary>
+    /// Caller tools are authoritative for this gateway request. This metadata tells the
+    /// Copilot SDK that a caller-provided name such as <c>bash</c> intentionally replaces
+    /// the SDK's built-in tool with the same name.
+    /// </summary>
+    public override AdditionalPropertiesDictionary AdditionalProperties =>
+        new() { ["is_override"] = true };
 }

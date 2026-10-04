@@ -102,16 +102,16 @@ builder.Services.AddSingleton<IChatClient>(sp =>
     var selected = sp.GetRequiredService<SelectedBackend>();
     var gate = sp.GetRequiredService<InferenceGate>();
     var limits = sp.GetRequiredService<IOptions<InferenceLimits>>();
-    IChatClient routing = new KareRoutingChatClient(
-        selected.Backend,
+
+    // These bounds protect only the passive local SLM. Cloud routes must be able to
+    // accept the larger prompts sent by Copilot CLI and other OpenAI clients.
+    IChatClient boundedLocal = new BoundedChatClient(selected.Backend, gate, limits);
+    return new KareRoutingChatClient(
+        boundedLocal,
         sp.GetRequiredService<ICloudInferenceBackend>(),
         sp.GetRequiredService<IRouteSelector>(),
         sp.GetRequiredService<IRouteRecorder>(),
         sp.GetRequiredService<ILoggerFactory>());
-
-    // Bounds wrap both local and cloud routes. A rejected request spends no local
-    // compute and no cloud credits.
-    return new BoundedChatClient(routing, gate, limits);
 });
 
 builder.Services.Configure<KestrelServerOptions>(options =>
