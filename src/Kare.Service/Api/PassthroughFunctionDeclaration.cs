@@ -40,6 +40,9 @@ internal sealed class PassthroughFunctionDeclaration : AIFunctionDeclaration
     /// Copilot SDK that a caller-provided name such as <c>bash</c> intentionally replaces
     /// the SDK's built-in tool with the same name.
     /// </summary>
-    public override AdditionalPropertiesDictionary AdditionalProperties =>
-        new() { ["is_override"] = true };
+    public override AdditionalPropertiesDictionary AdditionalProperties => new()
+    {
+        ["is_override"] = true,
+        ["overridesBuiltInTool"] = true,
+    };
 }
