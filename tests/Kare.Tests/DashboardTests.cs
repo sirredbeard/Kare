@@ -335,6 +335,43 @@ public sealed class DashboardTests
         }
     }
 
+    [Fact]
+    public async Task AuthoritativeSourceTimeoutIsRecordedWithoutStoppingService()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new DelayedResponseHandler())
+        {
+            Timeout = TimeSpan.FromMilliseconds(10),
+        };
+
+        try
+        {
+            var service = new DashboardKnowledgeService(
+                new InMemoryMetricsCollector(),
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+
+            var source = await service.AddSourceAsync(
+                new CreateAuthoritativeSourceRequest("https://1.1.1.1/*"),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("failed", source.Status);
+            Assert.NotNull(source.Error);
+        }
+        finally
+        {
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            Directory.Delete(directory);
+        }
+    }
+
     private static DashboardMetrics.RequestMetric CreateRequest(
         long inputTokens,
         long outputTokens,
@@ -378,5 +415,19 @@ public sealed class DashboardTests
             {
                 Content = new StringContent(content, Encoding.UTF8, mediaType),
             });
+    }
+
+    private sealed class DelayedResponseHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("late", Encoding.UTF8, "text/plain"),
+            };
+        }
     }
 }

@@ -522,7 +522,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         catch (Exception ex) when (
             !cancellationToken.IsCancellationRequested &&
             ex is HttpRequestException or IOException or InvalidOperationException or
-                System.Net.Sockets.SocketException)
+                System.Net.Sockets.SocketException or TaskCanceledException)
         {
             _logger.LogWarning(ex, "Authoritative source crawl failed for source {SourceId}.", source.Id);
             _collector.RegisterRoutingDecisionUrl(new DashboardMetrics.RoutingDecisionUrl(
@@ -809,7 +809,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         catch (Exception ex) when (
             !cancellationToken.IsCancellationRequested &&
             ex is HttpRequestException or IOException or InvalidOperationException or
-                System.Net.Sockets.SocketException)
+                System.Net.Sockets.SocketException or TaskCanceledException)
         {
             _logger.LogWarning(ex, "Remote skill refresh failed for skill {SkillName}.", skill.Name);
             var current = InspectSkill(skill);
