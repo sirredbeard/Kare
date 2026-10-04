@@ -373,11 +373,18 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             "provided and executed a matching tool.");
         AppendBounded(context, contentBuffer.ToString(), MaxInjectedCharacters);
 
-        return
-        [
-            new ChatMessage(ChatRole.System, context.ToString()),
-            .. messages,
-        ];
+        if (messages.Count > 0 && messages[0].Role == ChatRole.System)
+        {
+            var merged = new ChatMessage(ChatRole.System, context.ToString());
+            foreach (var content in messages[0].Contents)
+            {
+                merged.Contents.Add(content);
+            }
+
+            return [merged, .. messages.Skip(1)];
+        }
+
+        return [new ChatMessage(ChatRole.System, context.ToString()), .. messages];
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

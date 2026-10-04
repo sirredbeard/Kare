@@ -281,6 +281,60 @@ public sealed class DashboardTests
         }
     }
 
+    [Fact]
+    public async Task LocalContextMergesWithExistingLeadingSystemMessage()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var skillPath = Path.Combine(directory, "SKILL.md");
+        var statePath = Path.Combine(directory, "registry.json");
+        await File.WriteAllTextAsync(
+            skillPath,
+            "Use authoritative context.",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var service = new DashboardKnowledgeService(
+                new InMemoryMetricsCollector(),
+                new StaticHttpClientFactory(),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await service.AddSkillAsync(
+                new CreateDashboardSkillRequest("context", skillPath, "test", Enabled: true),
+                TestContext.Current.CancellationToken);
+
+            var enriched = await service.AddLocalContextAsync(
+                [
+                    new ChatMessage(ChatRole.System, "Cascade instructions."),
+                    new ChatMessage(ChatRole.User, "Route this."),
+                ],
+                TestContext.Current.CancellationToken);
+            var systemText = string.Join(
+                "\n",
+                enriched[0].Contents.OfType<TextContent>().Select(static content => content.Text));
+
+            Assert.Equal(2, enriched.Count);
+            Assert.Equal(ChatRole.System, enriched[0].Role);
+            Assert.Contains("Use authoritative context.", systemText, StringComparison.Ordinal);
+            Assert.Contains("Cascade instructions.", systemText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(skillPath))
+            {
+                File.Delete(skillPath);
+            }
+
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            Directory.Delete(directory);
+        }
+    }
+
     private static DashboardMetrics.RequestMetric CreateRequest(
         long inputTokens,
         long outputTokens,
