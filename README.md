@@ -34,13 +34,15 @@ Refresh the catalog from the account, not from the public model list alone. Use 
 
 ## Host Copilot CLI through Kare
 
-On the device, protected configuration binds Kare to the trusted LAN and limits callers with an explicit CIDR allow-list. The host launcher at `~/.config/kare/copilot-byok.sh` points directly at the device, exports the documented Copilot CLI OpenAI-compatible provider variables, and starts Copilot without changing the host's normal Copilot or Lerna settings:
+When Kare is loopback-only on the device, `build/tunnel.sh` opens a protected SSH local forward, waits for Kare to become healthy, exports the documented Copilot CLI OpenAI-compatible provider variables, and starts Copilot:
 
 ```bash
-~/.config/kare/copilot-byok.sh
+build/tunnel.sh
 ```
 
-The launcher reads `~/.config/kare/device.env`, which must remain mode `600`. The OpenAI-compatible `/v1` API still requires the configured bearer key. Kare advertises one public model, `kare`. Each request follows one bounded policy: cached cloud target, compact tool-free Qwen decision, then ordered cloud escalation. The GenieX gate disables extended model thinking so the answer-or-route marker fits its small latency and output budget. Tool-bearing requests send bounded tool names to the gate but skip bulk authoritative content because local answering is not allowed for those requests. They are limited to catalog entries that explicitly support caller-owned tools. Kare does not send Copilot's full tool-heavy request to GenieX.
+Arguments are forwarded to Copilot, for example `build/tunnel.sh -i "Review this repository"`. The tunnel closes when Copilot exits. The script reads `~/.config/kare/device.env`, which must remain mode `600`, and supports either `KARE_DEVICE_PASS` through `sshpass` or normal SSH key authentication. It uses an isolated `COPILOT_HOME` at `~/.config/kare/copilot-home` by default so normal Copilot plugins and Lerna settings cannot intercept the BYOK session. Override it with `KARE_COPILOT_HOME` only when that isolation is not wanted.
+
+The OpenAI-compatible `/v1` API still requires `KARE_API_KEY`. Kare advertises one public model, `kare`. The launcher defaults to 7,168 prompt tokens and 1,024 output tokens for the current 8,192-token GenieX model. Override these with `KARE_MAX_PROMPT_TOKENS` and `KARE_MAX_OUTPUT_TOKENS` only when the deployed model has a different measured context window. Each request follows one bounded policy: cached cloud target, compact tool-free Qwen decision, then ordered cloud escalation. The GenieX gate disables extended model thinking so the answer-or-route marker fits its small latency and output budget. Tool-bearing requests send bounded tool names to the gate but skip bulk authoritative content because local answering is not allowed for those requests. They are limited to catalog entries that explicitly support caller-owned tools. Kare does not send Copilot's full tool-heavy request to GenieX.
 
 ## Device iteration
 
