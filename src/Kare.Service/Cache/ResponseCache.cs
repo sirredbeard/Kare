@@ -281,6 +281,7 @@ public sealed class ResponseCache : IDisposable
             Append(hash, candidate.ModelId);
             Append(hash, candidate.Priority);
             Append(hash, candidate.SupportsTools);
+            Append(hash, candidate.SupportsImages);
         }
 
         foreach (var tool in options?.Tools?.OfType<AIFunctionDeclaration>() ?? [])

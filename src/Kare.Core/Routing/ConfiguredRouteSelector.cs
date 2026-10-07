@@ -120,7 +120,8 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
     {
         var candidates = _catalog.Models
             .Where(model => model.Tier == tier &&
-                (shape.ToolCount == 0 || model.SupportsTools))
+                (shape.ToolCount == 0 || model.SupportsTools) &&
+                (shape.ImageCount == 0 || model.SupportsImages))
             .OrderBy(static model => model.Priority)
             .ToArray();
         if (candidates.Length == 0)
@@ -147,6 +148,7 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
         ChatOptions? options)
     {
         long count = 0;
+        var imageCount = 0;
         foreach (var message in messages)
         {
             foreach (var content in message.Contents)
@@ -155,17 +157,23 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
                 {
                     count += text.Text.Length;
                 }
+                else if (content is DataContent data && data.HasTopLevelMediaType("image"))
+                {
+                    imageCount++;
+                }
             }
         }
 
         return new RequestShape(
             count,
             messages.Count,
-            options?.Tools?.Count ?? 0);
+            options?.Tools?.Count ?? 0,
+            imageCount);
     }
 
     private readonly record struct RequestShape(
         long Characters,
         int MessageCount,
-        int ToolCount);
+        int ToolCount,
+        int ImageCount);
 }

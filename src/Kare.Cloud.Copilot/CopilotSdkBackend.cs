@@ -46,7 +46,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 model.Provider,
                 model.Tier,
                 model.Priority,
-                model.SupportsTools))
+                model.SupportsTools,
+                model.SupportsImages))
             .ToArray();
     }
 
@@ -115,7 +116,9 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToArray();
         var route = ResolveRoute(options);
+        ThrowIfImagesUnsupported(materialized, route);
         ThrowIfCredentialMissing(route);
         var client = await GetClientAsync(cancellationToken).ConfigureAwait(false);
         await EnsureRouteAvailableAsync(client, route, cancellationToken).ConfigureAwait(false);
@@ -197,7 +200,7 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         try
         {
             await session.SendAsync(
-                new MessageOptions { Prompt = CreatePrompt(messages, options) },
+                CreateMessageOptions(materialized, options),
                 timeout.Token).ConfigureAwait(false);
             return await completion.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
         }
@@ -230,7 +233,9 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToArray();
         var route = ResolveRoute(options);
+        ThrowIfImagesUnsupported(materialized, route);
         ThrowIfCredentialMissing(route);
         var client = await GetClientAsync(cancellationToken).ConfigureAwait(false);
         await EnsureRouteAvailableAsync(client, route, cancellationToken).ConfigureAwait(false);
@@ -327,7 +332,7 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         try
         {
             await session.SendAsync(
-                new MessageOptions { Prompt = CreatePrompt(messages, options) },
+                CreateMessageOptions(materialized, options),
                 timeout.Token).ConfigureAwait(false);
 
             await foreach (var update in updates.Reader
@@ -484,6 +489,44 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
             : $"{prompt}\nYou must request one of the offered external tools before answering.";
     }
 
+    private static MessageOptions CreateMessageOptions(
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options)
+    {
+        var attachments = messages
+            .SelectMany(static message => message.Contents)
+            .OfType<DataContent>()
+            .Where(static content => content.HasTopLevelMediaType("image"))
+            .Select((content, index) => (Attachment)new AttachmentBlob
+            {
+                Data = content.Base64Data.ToString(),
+                DisplayName = content.Name ?? $"image-{index + 1}",
+                MimeType = content.MediaType,
+            })
+            .ToArray();
+
+        return new MessageOptions
+        {
+            Prompt = CreatePrompt(messages, options),
+            Attachments = attachments,
+        };
+    }
+
+    private static void ThrowIfImagesUnsupported(
+        IReadOnlyList<ChatMessage> messages,
+        ResolvedCloudRoute route)
+    {
+        if (!route.SupportsImages &&
+            messages.Any(static message =>
+                message.Contents.OfType<DataContent>()
+                    .Any(static content => content.HasTopLevelMediaType("image"))))
+        {
+            throw new UnsupportedBackendCapabilityException(
+                "images",
+                $"Cloud route {route.Id} does not support image attachments.");
+        }
+    }
+
     private async ValueTask<CopilotClient> GetClientAsync(CancellationToken cancellationToken)
     {
         if (_client is not null)
@@ -538,7 +581,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 configured.TokenScope,
                 configured.WireApi,
                 configured.MaxPromptTokens,
-                configured.MaxOutputTokens);
+                configured.MaxOutputTokens,
+                configured.SupportsImages);
         }
 
         var modelId = string.IsNullOrWhiteSpace(routeId) ? _options.ModelId : routeId;
@@ -556,7 +600,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 "https://cognitiveservices.azure.com/.default",
                 _options.FoundryWireApi,
                 null,
-                null);
+                null,
+                SupportsImages: false);
         }
 
         return new ResolvedCloudRoute(
@@ -570,7 +615,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
             string.Empty,
             null,
             null,
-            null);
+            null,
+            SupportsImages: false);
     }
 
     private async ValueTask EnsureRouteAvailableAsync(
@@ -648,7 +694,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         string TokenScope,
         string? WireApi,
         int? MaxPromptTokens,
-        int? MaxOutputTokens);
+        int? MaxOutputTokens,
+        bool SupportsImages);
 
     private static ChatResponse CreateToolResponse(
         ExternalToolRequestedEvent tool,

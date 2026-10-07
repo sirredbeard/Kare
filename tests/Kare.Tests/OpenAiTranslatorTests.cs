@@ -16,7 +16,7 @@ public sealed class OpenAiTranslatorTests
     {
         var request = Parse("""{"messages":[{"role":"user","content":"hello"}]}""");
 
-        Assert.Equal("hello", request.Messages[0].Content);
+        Assert.Equal("hello", request.Messages[0].Content?.Text);
     }
 
     [Fact]
@@ -26,14 +26,29 @@ public sealed class OpenAiTranslatorTests
         var request = Parse(
             """{"messages":[{"role":"user","content":[{"type":"text","text":"ab"},{"type":"text","text":"cd"}]}]}""");
 
-        Assert.Equal("abcd", request.Messages[0].Content);
+        Assert.Equal("abcd", request.Messages[0].Content?.Text);
     }
 
     [Fact]
-    public void RejectsNonTextContentPartsInsteadOfDroppingThem()
+    public void ReadsInlineImageContentParts()
     {
         var json =
-            """{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}""";
+            """{"messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AQID"}}]}]}""";
+
+        var request = Parse(json);
+        var message = Assert.Single(OpenAiTranslator.ToChatMessages(request.Messages));
+
+        Assert.Equal("look", Assert.IsType<TextContent>(message.Contents[0]).Text);
+        var image = Assert.IsType<DataContent>(message.Contents[1]);
+        Assert.Equal("image/png", image.MediaType);
+        Assert.Equal([1, 2, 3], image.Data.ToArray());
+    }
+
+    [Fact]
+    public void RejectsRemoteImageUrls()
+    {
+        var json =
+            """{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]}]}""";
 
         Assert.Throws<JsonException>(() => Parse(json));
     }

@@ -69,11 +69,11 @@ public sealed class ChatCompletionRequestMessage
 
     /// <summary>
     /// Message text. OpenAI allows either a bare string or an array of content parts,
-    /// and Copilot CLI sends the array form, so both are accepted and flattened to text.
+    /// and Copilot CLI sends the array form with text and inline image parts.
     /// </summary>
     [JsonPropertyName("content")]
     [JsonConverter(typeof(ChatContentConverter))]
-    public string? Content { get; set; }
+    public ChatMessageContent? Content { get; set; }
 
     /// <summary>Tool calls requested by a previous assistant turn.</summary>
     [JsonPropertyName("tool_calls")]

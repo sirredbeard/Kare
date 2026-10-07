@@ -1,19 +1,37 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.AI;
 
 namespace Kare.Service.Api;
 
-/// <summary>
-/// Reads the OpenAI message content union. The field is either a bare string or an array
-/// of typed parts, and Copilot CLI sends the array form. Kare flattens text parts and
-/// rejects part types it cannot serve rather than quietly dropping them, because silently
-/// discarding an image or audio part would send the model a prompt the caller did not write.
-/// </summary>
-public sealed class ChatContentConverter : JsonConverter<string?>
+/// <summary>Ordered text and inline image content from one OpenAI message.</summary>
+public sealed class ChatMessageContent
 {
+    internal ChatMessageContent(IReadOnlyList<AIContent> contents)
+    {
+        Contents = contents;
+    }
+
+    internal IReadOnlyList<AIContent> Contents { get; }
+
+    /// <summary>Concatenated text content.</summary>
+    public string Text => string.Concat(
+        Contents.OfType<TextContent>().Select(static content => content.Text));
+}
+
+/// <summary>
+/// Reads the OpenAI message content union. Copilot CLI sends text and inline image parts.
+/// Remote image URLs remain unsupported so Kare never fetches caller-controlled locations.
+/// </summary>
+public sealed class ChatContentConverter : JsonConverter<ChatMessageContent?>
+{
+    private const int MaxInlineImageBytes = 20 * 1024 * 1024;
+
     /// <inheritdoc />
-    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override ChatMessageContent? Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
     {
         switch (reader.TokenType)
         {
@@ -21,7 +39,8 @@ public sealed class ChatContentConverter : JsonConverter<string?>
                 return null;
 
             case JsonTokenType.String:
-                return reader.GetString();
+                return new ChatMessageContent(
+                    [new TextContent(reader.GetString() ?? string.Empty)]);
 
             case JsonTokenType.StartArray:
                 return ReadParts(ref reader);
@@ -32,15 +51,15 @@ public sealed class ChatContentConverter : JsonConverter<string?>
         }
     }
 
-    private static string ReadParts(ref Utf8JsonReader reader)
+    private static ChatMessageContent ReadParts(ref Utf8JsonReader reader)
     {
-        var builder = new StringBuilder();
+        var contents = new List<AIContent>();
 
         while (reader.Read())
         {
             if (reader.TokenType == JsonTokenType.EndArray)
             {
-                return builder.ToString();
+                return new ChatMessageContent(contents);
             }
 
             if (reader.TokenType != JsonTokenType.StartObject)
@@ -50,6 +69,7 @@ public sealed class ChatContentConverter : JsonConverter<string?>
 
             string? partType = null;
             string? partText = null;
+            string? imageUrl = null;
 
             while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
             {
@@ -69,29 +89,106 @@ public sealed class ChatContentConverter : JsonConverter<string?>
                     case "text":
                         partText = reader.TokenType == JsonTokenType.Null ? null : reader.GetString();
                         break;
+                    case "image_url":
+                        imageUrl = ReadImageUrl(ref reader);
+                        break;
                     default:
                         reader.Skip();
                         break;
                 }
             }
 
-            if (!string.Equals(partType, "text", StringComparison.Ordinal))
+            switch (partType)
             {
-                throw new JsonException(
-                    $"Kare serves text content parts only. Content part type '{partType}' is not supported.");
-            }
+                case "text":
+                    if (!string.IsNullOrEmpty(partText))
+                    {
+                        contents.Add(new TextContent(partText));
+                    }
 
-            if (!string.IsNullOrEmpty(partText))
-            {
-                builder.Append(partText);
+                    break;
+
+                case "image_url":
+                    contents.Add(CreateImageContent(imageUrl));
+                    break;
+
+                default:
+                    throw new JsonException(
+                        $"Kare does not support content part type '{partType}'.");
             }
         }
 
         throw new JsonException("Unterminated content part array.");
     }
 
+    private static string? ReadImageUrl(ref Utf8JsonReader reader)
+    {
+        if (reader.TokenType != JsonTokenType.StartObject)
+        {
+            throw new JsonException("image_url must be an object.");
+        }
+
+        string? url = null;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName)
+            {
+                throw new JsonException("Malformed image_url content.");
+            }
+
+            var property = reader.GetString();
+            reader.Read();
+            if (property == "url")
+            {
+                url = reader.TokenType == JsonTokenType.Null ? null : reader.GetString();
+            }
+            else
+            {
+                reader.Skip();
+            }
+        }
+
+        return url;
+    }
+
+    private static DataContent CreateImageContent(string? imageUrl)
+    {
+        if (string.IsNullOrWhiteSpace(imageUrl))
+        {
+            throw new JsonException("image_url.url is required.");
+        }
+
+        DataContent content;
+        try
+        {
+            content = new DataContent(imageUrl, mediaType: null);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new JsonException(
+                "Kare accepts inline data image URLs only; remote image URLs are not supported.",
+                ex);
+        }
+
+        if (!content.HasTopLevelMediaType("image"))
+        {
+            throw new JsonException($"Content media type '{content.MediaType}' is not an image.");
+        }
+
+        if (content.Data.Length > MaxInlineImageBytes)
+        {
+            throw new JsonException(
+                $"Inline image content exceeds the {MaxInlineImageBytes}-byte limit.");
+        }
+
+        return content;
+    }
+
     /// <inheritdoc />
-    public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options)
+    public override void Write(
+        Utf8JsonWriter writer,
+        ChatMessageContent? value,
+        JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(writer);
 
@@ -101,7 +198,33 @@ public sealed class ChatContentConverter : JsonConverter<string?>
             return;
         }
 
-        writer.WriteStringValue(value);
+        writer.WriteStartArray();
+        foreach (var content in value.Contents)
+        {
+            writer.WriteStartObject();
+            switch (content)
+            {
+                case TextContent text:
+                    writer.WriteString("type", "text");
+                    writer.WriteString("text", text.Text);
+                    break;
+
+                case DataContent data when data.HasTopLevelMediaType("image"):
+                    writer.WriteString("type", "image_url");
+                    writer.WriteStartObject("image_url");
+                    writer.WriteString("url", data.Uri);
+                    writer.WriteEndObject();
+                    break;
+
+                default:
+                    throw new JsonException(
+                        $"Kare cannot write content type '{content.GetType().Name}'.");
+            }
+
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndArray();
     }
 }
 

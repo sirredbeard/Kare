@@ -151,6 +151,25 @@ public sealed class HydraFusionCascadeChatClientTests
     }
 
     [Fact]
+    public async Task ImageRequestSkipsLocalGateAndUsesImageCapableCloudTarget()
+    {
+        var local = new ScriptedChatClient((_, _) =>
+            throw new InvalidOperationException("The local gate must not receive image requests."));
+        var cloud = new ScriptedCloudBackend();
+        using var cache = CreateCache();
+        using var client = CreateClient(local, cloud, cache);
+        var image = new DataContent(new byte[] { 1, 2, 3 }, "image/png");
+
+        var response = await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, [new TextContent("Inspect this."), image])],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("cloud-fast", response.Text);
+        Assert.Equal(0, local.CallCount);
+        Assert.Equal(["fast"], cloud.ModelsCalled);
+    }
+
+    [Fact]
     public async Task StreamingFailureBeforeOutputEscalatesToNextTarget()
     {
         var local = new ScriptedChatClient((_, _) =>
@@ -215,7 +234,8 @@ public sealed class HydraFusionCascadeChatClientTests
                     CloudModelProvider.GitHubCopilot,
                     CloudModelTier.Fast,
                     Priority: 10,
-                    SupportsTools: true),
+                    SupportsTools: true,
+                    SupportsImages: true),
                 new CloudModelDescriptor(
                     "no-tools",
                     "no-tools-model",
@@ -229,7 +249,8 @@ public sealed class HydraFusionCascadeChatClientTests
                     CloudModelProvider.GitHubCopilot,
                     CloudModelTier.Heavy,
                     Priority: 20,
-                    SupportsTools: true),
+                    SupportsTools: true,
+                    SupportsImages: true),
             ]),
             new NullRouteRecorder(),
             cache,

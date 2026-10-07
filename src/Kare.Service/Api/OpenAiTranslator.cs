@@ -31,11 +31,17 @@ internal static class OpenAiTranslator
             {
                 case "system":
                 case "developer":
-                    result.Add(new ChatMessage(ChatRole.System, message.Content ?? string.Empty));
+                    result.Add(new ChatMessage(
+                        ChatRole.System,
+                        GetTextOnlyContent(message, message.Role)));
                     break;
 
                 case "user":
-                    result.Add(new ChatMessage(ChatRole.User, message.Content ?? string.Empty));
+                    result.Add(new ChatMessage(
+                        ChatRole.User,
+                        message.Content?.Contents.Count > 0
+                            ? [.. message.Content.Contents]
+                            : [new TextContent(string.Empty)]));
                     break;
 
                 case "assistant":
@@ -60,9 +66,10 @@ internal static class OpenAiTranslator
     {
         var contents = new List<AIContent>();
 
-        if (!string.IsNullOrEmpty(message.Content))
+        var messageText = GetTextOnlyContent(message, "assistant");
+        if (!string.IsNullOrEmpty(messageText))
         {
-            contents.Add(new TextContent(message.Content));
+            contents.Add(new TextContent(messageText));
         }
 
         foreach (var call in message.ToolCalls ?? [])
@@ -99,7 +106,28 @@ internal static class OpenAiTranslator
 
         return new ChatMessage(
             ChatRole.Tool,
-            [new FunctionResultContent(message.ToolCallId, message.Content ?? string.Empty)]);
+            [new FunctionResultContent(
+                message.ToolCallId,
+                GetTextOnlyContent(message, "tool"))]);
+    }
+
+    private static string GetTextOnlyContent(
+        ChatCompletionRequestMessage message,
+        string role)
+    {
+        if (message.Content is null)
+        {
+            return string.Empty;
+        }
+
+        if (message.Content.Contents.Any(static content => content is not TextContent))
+        {
+            throw new InvalidRequestException(
+                $"{role} messages cannot contain image content.",
+                "unsupported_message_content");
+        }
+
+        return message.Content.Text;
     }
 
     /// <summary>

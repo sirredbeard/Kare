@@ -90,6 +90,9 @@ public sealed class CloudModelRouteOptions
     /// <summary>Whether this route supports caller-owned tool declarations.</summary>
     public bool SupportsTools { get; set; } = true;
 
+    /// <summary>Whether this route accepts image attachments.</summary>
+    public bool SupportsImages { get; set; }
+
     /// <summary>OpenAI-compatible HTTPS base URL. Required only for Foundry.</summary>
     public string? BaseUrl { get; set; }
 

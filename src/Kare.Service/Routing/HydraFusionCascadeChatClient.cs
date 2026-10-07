@@ -65,21 +65,39 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
     {
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToArray();
         var requiresTools = RequiresTools(materialized, options);
-        var candidates = GetCandidates(requiresTools);
+        var requiresImages = RequiresImages(materialized);
+        var candidates = GetCandidates(requiresTools, requiresImages);
         if (!_options.EnableCascadeEscalation)
         {
+            if (requiresImages)
+            {
+                throw new UnsupportedBackendCapabilityException(
+                    "images",
+                    "Image requests require an enabled image-capable cloud cascade route.");
+            }
+
             return await CompleteLocalAsync(materialized, options, cancellationToken).ConfigureAwait(false);
         }
         if (candidates.Count == 0)
         {
-            if (requiresTools)
+            if (requiresTools || requiresImages)
             {
                 throw new UnsupportedBackendCapabilityException(
-                    "tools",
-                    "No configured cloud cascade target supports caller-owned tools.");
+                    requiresImages ? "images" : "tools",
+                    "No configured cloud cascade target supports this request's capabilities.");
             }
 
             return await CompleteLocalAsync(materialized, options, cancellationToken).ConfigureAwait(false);
+        }
+        if (requiresImages)
+        {
+            return await CompleteCloudCascadeAsync(
+                materialized,
+                options,
+                candidates,
+                candidates[0].Id,
+                "Image content requires an explicitly image-capable cloud model.",
+                cancellationToken).ConfigureAwait(false);
         }
 
         var decisionMessages = CreateDecisionMessages(materialized, options, candidates);
@@ -127,9 +145,17 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
     {
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToArray();
         var requiresTools = RequiresTools(materialized, options);
-        var candidates = GetCandidates(requiresTools);
+        var requiresImages = RequiresImages(materialized);
+        var candidates = GetCandidates(requiresTools, requiresImages);
         if (!_options.EnableCascadeEscalation)
         {
+            if (requiresImages)
+            {
+                throw new UnsupportedBackendCapabilityException(
+                    "images",
+                    "Image requests require an enabled image-capable cloud cascade route.");
+            }
+
             await foreach (var update in StreamLocalAsync(materialized, options, cancellationToken)
                 .ConfigureAwait(false))
             {
@@ -140,15 +166,30 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         }
         if (candidates.Count == 0)
         {
-            if (requiresTools)
+            if (requiresTools || requiresImages)
             {
                 throw new UnsupportedBackendCapabilityException(
-                    "tools",
-                    "No configured cloud cascade target supports caller-owned tools.");
+                    requiresImages ? "images" : "tools",
+                    "No configured cloud cascade target supports this request's capabilities.");
             }
 
             await foreach (var update in StreamLocalAsync(materialized, options, cancellationToken)
                 .ConfigureAwait(false))
+            {
+                yield return update;
+            }
+
+            yield break;
+        }
+        if (requiresImages)
+        {
+            await foreach (var update in StreamCloudCascadeAsync(
+                materialized,
+                options,
+                candidates,
+                candidates[0].Id,
+                "Image content requires an explicitly image-capable cloud model.",
+                cancellationToken).ConfigureAwait(false))
             {
                 yield return update;
             }
@@ -395,9 +436,13 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         }
     }
 
-    private IReadOnlyList<CloudModelDescriptor> GetCandidates(bool requiresTools) =>
+    private IReadOnlyList<CloudModelDescriptor> GetCandidates(
+        bool requiresTools,
+        bool requiresImages) =>
         _catalog.Models
-            .Where(model => !requiresTools || model.SupportsTools)
+            .Where(model =>
+                (!requiresTools || model.SupportsTools) &&
+                (!requiresImages || model.SupportsImages))
             .OrderBy(static model => model.Priority)
             .ThenBy(static model => model.Tier)
             .ThenBy(static model => model.Id, StringComparer.Ordinal)
@@ -408,6 +453,11 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         messages.Any(static message =>
             message.Contents.Any(static content =>
                 content is FunctionCallContent or FunctionResultContent));
+
+    private static bool RequiresImages(IReadOnlyList<ChatMessage> messages) =>
+        messages.Any(static message =>
+            message.Contents.OfType<DataContent>()
+                .Any(static content => content.HasTopLevelMediaType("image")));
 
     private IReadOnlyList<ChatMessage> CreateDecisionMessages(
         IReadOnlyList<ChatMessage> messages,
@@ -423,7 +473,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         var candidateList = string.Join(
             '\n',
             candidates.Select(static candidate =>
-                $"- {candidate.Id}: {candidate.ModelId}; tier={candidate.Tier}; tools={candidate.SupportsTools}"));
+                $"- {candidate.Id}: {candidate.ModelId}; tier={candidate.Tier}; tools={candidate.SupportsTools}; images={candidate.SupportsImages}"));
         var toolCount = options?.Tools?.Count ?? 0;
         var toolNames = string.Join(
             ", ",

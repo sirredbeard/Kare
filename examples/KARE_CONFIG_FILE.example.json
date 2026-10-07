@@ -25,6 +25,7 @@
             "Tier": "Fast",
             "Priority": 100,
             "SupportsTools": true,
+            "SupportsImages": true,
             "Authentication": "Copilot"
           },
           {
@@ -34,6 +35,7 @@
             "Tier": "Heavy",
             "Priority": 100,
             "SupportsTools": true,
+            "SupportsImages": true,
             "Authentication": "Copilot"
           },
           {

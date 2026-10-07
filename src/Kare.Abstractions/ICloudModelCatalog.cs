@@ -35,13 +35,15 @@ public enum CloudModelTier
 /// <param name="Tier">Escalation tier.</param>
 /// <param name="Priority">Lower values are preferred within a tier.</param>
 /// <param name="SupportsTools">Whether caller-owned tool declarations are supported.</param>
+/// <param name="SupportsImages">Whether image attachments are supported.</param>
 public sealed record CloudModelDescriptor(
     string Id,
     string ModelId,
     CloudModelProvider Provider,
     CloudModelTier Tier,
     int Priority,
-    bool SupportsTools)
+    bool SupportsTools,
+    bool SupportsImages = false)
 {
     /// <summary>Route recorded when this model serves a request.</summary>
     public KareRoute Route => Provider == CloudModelProvider.MicrosoftFoundry
