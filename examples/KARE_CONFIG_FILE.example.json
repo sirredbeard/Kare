@@ -1,0 +1,69 @@
+{
+  "Kare": {
+    "Service": {
+      "ModelId": "kare"
+    },
+    "Routing": {
+      "EnableCascadeEscalation": true,
+      "CascadeDecisionMaxInputCharacters": 6000,
+      "CascadeDecisionMaxOutputTokens": 256
+    },
+    "Cloud": {
+      "CopilotSdk": {
+        "Enabled": true,
+        "UseLoggedInUser": true,
+        "GitHubTokenEnvironmentVariable": "KARE_COPILOT_GITHUB_TOKEN",
+        "CredentialTimeoutSeconds": 30,
+        "TimeoutSeconds": 180,
+        "MaxAiCreditsPerRequest": 30,
+        "StateDirectory": "/var/lib/kare/copilot",
+        "Models": [
+          {
+            "Id": "copilot-fast",
+            "Provider": "GitHubCopilot",
+            "ModelId": "mai-code-1.1-flash",
+            "Tier": "Fast",
+            "Priority": 100,
+            "SupportsTools": true,
+            "Authentication": "Copilot"
+          },
+          {
+            "Id": "copilot-heavy",
+            "Provider": "GitHubCopilot",
+            "ModelId": "gpt-5.6-terra",
+            "Tier": "Heavy",
+            "Priority": 100,
+            "SupportsTools": true,
+            "Authentication": "Copilot"
+          },
+          {
+            "Id": "foundry-responses-example",
+            "Provider": "MicrosoftFoundry",
+            "ModelId": "your-public-model-id",
+            "WireModel": "your-foundry-deployment",
+            "Tier": "Complex",
+            "Priority": 100,
+            "SupportsTools": false,
+            "BaseUrl": "https://your-resource.services.ai.azure.com",
+            "Authentication": "AzureCli",
+            "TokenScope": "https://cognitiveservices.azure.com/.default",
+            "WireApi": "responses"
+          },
+          {
+            "Id": "foundry-anthropic-example",
+            "Provider": "MicrosoftFoundry",
+            "ModelId": "your-anthropic-model-id",
+            "WireModel": "your-anthropic-deployment",
+            "Tier": "Complex",
+            "Priority": 200,
+            "SupportsTools": false,
+            "BaseUrl": "https://your-resource.services.ai.azure.com",
+            "Authentication": "AzureCli",
+            "TokenScope": "https://cognitiveservices.azure.com/.default",
+            "WireApi": "anthropic"
+          }
+        ]
+      }
+    }
+  }
+}

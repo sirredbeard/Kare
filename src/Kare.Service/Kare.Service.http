@@ -1,0 +1,55 @@
+@baseUrl = http://device-hostname-or-address:5285
+@apiKey = replace-with-protected-api-key
+
+### Health
+GET {{baseUrl}}/health
+
+### Dashboard snapshot, allowed LAN only
+GET {{baseUrl}}/dashboard/api/snapshot
+
+### Add an authoritative source
+POST {{baseUrl}}/dashboard/api/sources
+Content-Type: application/json
+
+{
+  "pattern": "https://learn.microsoft.com/dotnet/*",
+  "enabled": true
+}
+
+### Add an explicit local-file skill
+POST {{baseUrl}}/dashboard/api/skills
+Content-Type: application/json
+
+{
+  "name": "example",
+  "path": "/absolute/path/to/SKILL.md",
+  "description": "Example local skill",
+  "enabled": true
+}
+
+### Add an HTTPS skill
+POST {{baseUrl}}/dashboard/api/skills
+Content-Type: application/json
+
+{
+  "name": "remote-example",
+  "path": "https://example.com/SKILL.md",
+  "description": "Example remote skill",
+  "enabled": true
+}
+
+### Add and probe a Streamable HTTP MCP server
+POST {{baseUrl}}/dashboard/api/mcp-servers
+Content-Type: application/json
+
+{
+  "name": "example",
+  "endpoint": "https://mcp.example.com/mcp"
+}
+
+### Clear response cache
+DELETE {{baseUrl}}/dashboard/api/cache
+
+### List advertised OpenAI models
+GET {{baseUrl}}/v1/models
+Authorization: Bearer {{apiKey}}

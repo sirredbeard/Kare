@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>kare-probe</AssemblyName>
+    <RootNamespace>Kare.DeviceProbe</RootNamespace>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(KareRuntimeIdentifier)</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Kare.Abstractions/Kare.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Kare.Core/Kare.Core.csproj" />
+    <ProjectReference Include="../../src/Kare.Inference.OnnxGenAI/Kare.Inference.OnnxGenAI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+</Project>

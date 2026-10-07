@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Test assemblies are not deployed to the board, so AOT analysis is not required here. -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Kare.Abstractions/Kare.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Kare.Cloud.Copilot/Kare.Cloud.Copilot.csproj" />
+    <ProjectReference Include="../../src/Kare.CopilotLauncher/Kare.CopilotLauncher.csproj" />
+    <ProjectReference Include="../../src/Kare.Core/Kare.Core.csproj" />
+    <ProjectReference Include="../../src/Kare.Inference.GenieX/Kare.Inference.GenieX.csproj" />
+    <ProjectReference Include="../../src/Kare.Inference.OnnxGenAI/Kare.Inference.OnnxGenAI.csproj" />
+    <ProjectReference Include="../../src/Kare.Service/Kare.Service.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+</Project>

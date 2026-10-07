@@ -1,0 +1,39 @@
+# Pinned ARM64 build environment for Kare.
+#
+# Native AOT cannot be cross linked from an x86_64 host with the stock binutils, because
+# ld.bfd there does not support the aarch64linux emulation. Building inside an aarch64
+# Ubuntu 24.04 image matches the VENTUNO Q operating system and removes the cross linking
+# problem entirely.
+#
+# On an x86_64 workstation this runs under qemu-aarch64 binfmt and is slow but correct.
+# On an aarch64 build machine it runs natively.
+
+FROM docker.io/library/ubuntu:24.04
+
+ARG DOTNET_CHANNEL=11.0
+ARG DOTNET_QUALITY=preview
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    DOTNET_ROOT=/usr/share/dotnet \
+    PATH=/usr/share/dotnet:/usr/share/dotnet/tools:$PATH \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    NUGET_PACKAGES=/nuget
+
+# clang, lld, and the static libraries below are the Native AOT link time dependencies.
+# libicu and openssl are the .NET runtime dependencies that also have to exist on the board.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl \
+      clang lld llvm \
+      zlib1g-dev libkrb5-dev libssl-dev libicu-dev \
+      binutils file \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+ && chmod +x /tmp/dotnet-install.sh \
+ && /tmp/dotnet-install.sh --channel "$DOTNET_CHANNEL" --quality "$DOTNET_QUALITY" --install-dir "$DOTNET_ROOT" \
+ && rm /tmp/dotnet-install.sh \
+ && dotnet --info
+
+WORKDIR /src
