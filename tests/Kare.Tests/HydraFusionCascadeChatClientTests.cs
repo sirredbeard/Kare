@@ -58,6 +58,26 @@ public sealed class HydraFusionCascadeChatClientTests
     }
 
     [Fact]
+    public async Task TruncatedLocalAnswerEscalatesToCloud()
+    {
+        var local = new ScriptedChatClient((_, _) =>
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "KARE_ANSWER:\nPartial answer"))
+            {
+                FinishReason = ChatFinishReason.Length,
+            });
+        var cloud = new ScriptedCloudBackend();
+        using var cache = CreateCache();
+        using var client = CreateClient(local, cloud, cache);
+
+        var response = await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Give me the complete answer.")],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("cloud-fast", response.Text);
+        Assert.Equal(["fast"], cloud.ModelsCalled);
+    }
+
+    [Fact]
     public async Task CloudFailureBeforeResponseEscalatesToNextTarget()
     {
         var local = new ScriptedChatClient((_, _) =>

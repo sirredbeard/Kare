@@ -13,6 +13,9 @@ public sealed class CopilotLauncherTests
         Assert.Null(result.DeviceHost);
         Assert.Equal(["-i", "Review this repository"], result.CopilotArguments);
         Assert.False(result.ShowHelp);
+        Assert.False(result.Verbose);
+        Assert.False(result.MinimalContext);
+        Assert.Null(result.Error);
     }
 
     [Fact]
@@ -23,6 +26,49 @@ public sealed class CopilotLauncherTests
         Assert.Equal("device.example", result.DeviceHost);
         Assert.Equal(["-i", "Review this repository"], result.CopilotArguments);
         Assert.False(result.ShowHelp);
+    }
+
+    [Fact]
+    public void ParseSeparatesLauncherDiagnosticsFromCopilotArguments()
+    {
+        var result = LauncherInputParser.Parse(
+            ["--kare-verbose", "--kare-log-dir", "/tmp/kare-logs", "--kare-minimal-context", "-p", "test"]);
+
+        Assert.True(result.Verbose);
+        Assert.Equal("/tmp/kare-logs", result.LogDirectory);
+        Assert.True(result.MinimalContext);
+        Assert.Equal(["-p", "test"], result.CopilotArguments);
+        Assert.Null(result.Error);
+    }
+
+    [Fact]
+    public void ParseRejectsMissingLauncherLogDirectory()
+    {
+        var result = LauncherInputParser.Parse(["--kare-log-dir"]);
+
+        Assert.Equal("--kare-log-dir requires a path.", result.Error);
+    }
+
+    [Theory]
+    [InlineData("--help")]
+    [InlineData("--kare-verbose")]
+    public void ParsePreservesCopilotOptionValues(string value)
+    {
+        var result = LauncherInputParser.Parse(["-p", value]);
+
+        Assert.False(result.ShowHelp);
+        Assert.False(result.Verbose);
+        Assert.Equal(["-p", value], result.CopilotArguments);
+    }
+
+    [Fact]
+    public void ParseHonorsPassThroughBoundary()
+    {
+        var result = LauncherInputParser.Parse(["--kare-verbose", "--", "--help"]);
+
+        Assert.True(result.Verbose);
+        Assert.False(result.ShowHelp);
+        Assert.Equal(["--help"], result.CopilotArguments);
     }
 
     [Fact]

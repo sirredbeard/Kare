@@ -42,6 +42,9 @@ The launcher reads these values when present:
 - `KARE_WIRE_MODEL`
 - `KARE_MAX_PROMPT_TOKENS`
 - `KARE_MAX_OUTPUT_TOKENS`
+- `KARE_LOG_DIRECTORY`
+- `KARE_LOG_FILE_BYTES`
+- `KARE_LOG_TOTAL_BYTES`
 
 The launcher writes the last healthy device address to `last-device-host` beside the protected config. It must write the file only after `/health` succeeds and use mode `600` on Unix.
 
@@ -66,6 +69,12 @@ The launcher should:
 - wait for `/health` on `http://127.0.0.1:5285`
 - export the required BYOK env vars for Copilot CLI
 - start Copilot with an isolated `COPILOT_HOME`
+
+The default launcher profile matches the measured 24576-token GenieX runtime. It advertises 23552 prompt tokens and reserves 1024 output tokens. Copilot CLI 1.0.92 then loads all 26 tools, repository instructions, and the builtin GitHub MCP server without rejecting the turn before Kare receives it.
+
+The local cascade gate uses at most the final 1024 request characters and 32 output tokens. Keep this routing request small. The full Copilot wrapper took more than two minutes when the gate admitted 6000 characters.
+
+`--kare-verbose` adds Copilot CLI debug logging under protected local configuration. `--kare-log-dir PATH` selects the directory. `--kare-minimal-context` selects the earlier 8192-token offline diagnostic profile with builtin MCP servers and repository instructions disabled and only `bash` exposed.
 
 The repo does not depend on a shell script as the primary interface. The .NET launcher is the canonical path.
 
@@ -115,6 +124,43 @@ Publish and test the device service with:
 
 Keep the checked-out device branch synchronized with Git. Do not copy source trees or credentials through ad hoc deployment commands. `build/deploy.sh` is only for copying an already-published artifact when Git-based device iteration is not available.
 
+Use this workflow for normal device changes:
+
+1. Commit locally without co-authors or co-committers.
+2. Push the branch to GitHub.
+3. SSH to the device checkout and run `git pull --ff-only`.
+4. Stop `kare.service`.
+5. Run `./build/device-publish.sh --jit --test`.
+6. Confirm `kare.service` and `kare-geniex.service` are active.
+7. Check `http://127.0.0.1:5285/health` and `http://127.0.0.1:18181/v1/models`.
+
+Do not rebuild from an uncommitted source copy on the device. Do not use Native AOT for the normal iteration path.
+
+## Device storage layout
+
+The VENTUNO Q boots from eMMC. The installed OSCOO PCIe 512GB drive is `/dev/nvme0n1p1`, formatted as ext4, and mounted at `/var/lib/kare` with `noatime`.
+
+Keep these items on eMMC:
+
+- The operating system and boot files.
+- The Kare checkout at `%h/Kare`.
+- Published Kare releases under `%h/kare/service`.
+- Protected configuration under `%h/.config/kare`.
+- User systemd units under `%h/.config/systemd/user`.
+
+Keep these items on NVMe:
+
+- `/var/lib/kare/models/geniex` - GenieX model data.
+- `/var/lib/kare/runtimes/geniex` - the GenieX Linux ARM64 runtime and native libraries.
+
+The `kare-geniex.service` user unit uses `GENIEX_DATADIR=/var/lib/kare/models/geniex` and loads its executable and libraries from `/var/lib/kare/runtimes/geniex`. Do not move the Kare service checkout or release symlink without a separate rollback plan.
+
+Kare does not retain persistent logs, response-cache data, or backups in the NVMe layout. The bounded response cache is process-local and starts empty after restart. Do not add a database, log directory, backup directory, or cache directory to `/var/lib/kare` without an explicit retention, deletion, and recovery policy.
+
+The drive currently negotiates PCIe Gen4 x1 even though the root port advertises x4. Record that fact in performance notes and do not describe the storage path as a full Gen4 x4 path until firmware, device tree, kernel, and physical seating checks explain it.
+
+Verbose Kare service logs live on eMMC under `%h/.local/state/kare/logs`, not NVMe. Set `KARE_LOG_DIRECTORY` to that absolute path and `Logging__LogLevel__Default=Debug` in the protected service environment. Kare rolls files at 25 MiB and retains no more than 250 MiB by default. `KARE_LOG_FILE_BYTES` and `KARE_LOG_TOTAL_BYTES` may lower those limits.
+
 ## Copilot integration
 
 The supported path is GitHub Copilot CLI BYOK pointed at Kare's OpenAI-compatible `/v1` endpoint. That requires streaming and tool-call metadata on the wire.
@@ -149,21 +195,36 @@ Use hooks and policy for redaction, route metadata, cache fingerprints, and acco
 
 ## Operations dashboard
 
-The service exposes the operations dashboard at `/dashboard`. It is for metadata Kare already owns and must not display or persist prompt text, source code, generated responses, credentials, provider tokens, or protected configuration.
+The service exposes the operations dashboard at `/dashboard`. Open `http://127.0.0.1:5285/dashboard` on the device, or forward port `5285` through SSH and open the forwarded local address in a browser. The dashboard is local by default. Do not make it non-loopback until authentication, request limits, and an explicit trusted CIDR allow-list are configured.
+
+The dashboard is for metadata Kare already owns. It must not display or persist prompt text, source code, generated responses, credentials, provider tokens, or protected configuration.
 
 The dashboard may show:
 
-- recent route decisions, model IDs, backends, fallback state, success, billable state, latency, token counts, and decode rate
-- queue depth, active local inference, completed requests, and average first-token latency
-- bounded cache hashes, timestamps, size, and delete controls
-- configured local, GitHub Copilot, and other external model endpoints
-- authoritative HTTPS source patterns and refresh status
-- skills loaded from explicit device paths or public HTTPS URLs
-- configured Streamable HTTP MCP servers, advertised capabilities, connection state, and last connection time
+- Recent route decisions, model IDs, backends, fallback state, success, billable state, latency, token counts, and decode rate.
+- Queue depth, active local inference, completed requests, and average first-token latency.
+- Bounded cache hashes, timestamps, size, and delete controls.
+- Configured local, GitHub Copilot, and other external model endpoints.
+- Authoritative HTTPS source patterns and refresh status.
+- Skills loaded from explicit device paths or public HTTPS URLs.
+- Configured Streamable HTTP MCP servers, advertised capabilities, connection state, and last connection time.
 
 Dashboard state stays bounded and process-local until the persistence design is complete. Repository defaults remain loopback-only. Non-loopback access requires explicit enablement and a trusted CIDR allow-list. The OpenAI-compatible API remains bearer-authenticated.
 
 The dashboard registry must not scan arbitrary home directories or import GitHub Copilot settings. Remote sources and skills need fixed page, byte, refresh, and injected-context limits.
+
+## Repository layout
+
+- `src/Kare.Service` - HTTP service, dashboard, and OpenAI-compatible endpoint.
+- `src/Kare.Core` - routing policy, limits, cache, and request handling.
+- `src/Kare.Cloud.Copilot` - GitHub Copilot SDK and configured cloud routes.
+- `src/Kare.Inference.GenieX` - local GenieX adapter.
+- `src/Kare.Inference.OnnxGenAI` - measured CPU fallback.
+- `src/Kare.CopilotLauncher` - cross-platform `copilot-kare` launcher.
+- `bench/Kare.DeviceProbe` - device and native runtime probe.
+- `findings/` - dated research and measured device results.
+- `plan.md` - architecture, open gates, and staged work.
+- `tests/Kare.Tests` - focused automated checks.
 
 ## Validation
 

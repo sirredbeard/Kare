@@ -5,8 +5,8 @@
     },
     "Routing": {
       "EnableCascadeEscalation": true,
-      "CascadeDecisionMaxInputCharacters": 6000,
-      "CascadeDecisionMaxOutputTokens": 256
+      "CascadeDecisionMaxInputCharacters": 1024,
+      "CascadeDecisionMaxOutputTokens": 32
     },
     "Cloud": {
       "CopilotSdk": {

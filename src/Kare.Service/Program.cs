@@ -9,6 +9,7 @@ using Kare.Service;
 using Kare.Service.Api;
 using Kare.Service.Cache;
 using Kare.Service.Dashboard;
+using Kare.Service.Logging;
 using Kare.Service.Options;
 using Kare.Service.Routing;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -16,6 +17,15 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateSlimBuilder(args);
+
+var logDirectory = Environment.GetEnvironmentVariable("KARE_LOG_DIRECTORY");
+if (!string.IsNullOrWhiteSpace(logDirectory))
+{
+    builder.Logging.AddProvider(new RotatingFileLoggerProvider(
+        logDirectory,
+        ReadPositiveLong("KARE_LOG_FILE_BYTES", 25L * 1024 * 1024),
+        ReadPositiveLong("KARE_LOG_TOTAL_BYTES", 250L * 1024 * 1024)));
+}
 
 var externalConfig = Environment.GetEnvironmentVariable("KARE_CONFIG_FILE");
 if (!string.IsNullOrWhiteSpace(externalConfig))
@@ -172,6 +182,22 @@ var selection = await app.Services.GetRequiredService<LocalBackendSelector>()
 app.Services.GetRequiredService<SelectedBackend>().Set(selection.Backend);
 
 await app.RunAsync();
+
+static long ReadPositiveLong(string key, long defaultValue)
+{
+    var value = Environment.GetEnvironmentVariable(key);
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultValue;
+    }
+
+    if (long.TryParse(value, out var parsed) && parsed > 0)
+    {
+        return parsed;
+    }
+
+    throw new InvalidOperationException($"{key} must be a positive integer.");
+}
 
 static void GuardBinding(WebApplication app, KareServiceOptions options)
 {

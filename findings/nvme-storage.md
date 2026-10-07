@@ -208,7 +208,7 @@ filename: /lib/modules/6.8.0-1084-qcom/kernel/drivers/nvme/host/nvme.ko.zst
 description: NVMe host PCIe transport driver
 ```
 
-## Measured 2026-10-02, what we would gain
+## Measured 2026-10-02, what we expected to gain
 
 Current storage is eMMC, `/dev/mmcblk0`, 59.3 GB with about 34 GB free, ext4 on `/dev/mmcblk0p71`. Sequential read measured with caches dropped:
 
@@ -231,6 +231,61 @@ Embeddings and vector search. If we add pgvector or any local index, random read
 
 What it will not fix. Inference is CPU and NPU bound. Prefill is currently about 15 ms per prompt token on CPU and storage has nothing to do with that. Do not expect the NVMe to make generation faster.
 
-## Plan
+## Measured 2026-10-06, the OSCOO drive is installed
 
-Buy a named 2230 M key NVMe drive, not the 2280 and not a seller-variable OEM listing unless the exact part and condition are confirmed. Prefer 512 GB or 1 TB. Mount it at `/var/lib/kare` and put models, the cache database, logs, and any index there. Keep the root filesystem on eMMC and keep writes off it.
+The board now sees the installed drive:
+
+```
+/dev/nvme0n1 476.9G OSCOO PCIe 512GB
+controller                 MAXIO MAP1602, DRAM-less
+firmware                   SN025696
+logical block size         512 bytes
+physical block size        512 bytes
+partition table            none
+filesystem                 none
+mount                      none
+kernel driver              nvme
+```
+
+The PCIe root port can run at Gen4 x4, but the active link is downgraded:
+
+```
+LnkCap:  Speed 16GT/s, Width x4
+LnkSta:  Speed 16GT/s, Width x1 (downgraded)
+```
+
+The first read-only test transferred 1 GiB with direct I/O at 1.6 GB/s. That is about 5.4 times the earlier 294 MB/s eMMC read, however it is not a full Gen4 x4 result. The x1 negotiation needs a separate hardware and firmware investigation before we claim the slot is operating normally.
+
+`nvme-cli` is not installed on the board yet. The first health pass used sysfs, `lsblk`, `lspci`, and a privileged direct read. No write test has been run, and the drive has not been formatted.
+
+## NVMe rollout plan
+
+The first migration is complete:
+
+1. The drive was partitioned as GPT and formatted as ext4 with `noatime`, then mounted at `/var/lib/kare`.
+2. The GenieX model data moved to `/var/lib/kare/models/geniex`.
+3. The GenieX Linux ARM64 runtime moved to `/var/lib/kare/runtimes/geniex`.
+4. The `kare-geniex.service` unit now uses `GENIEX_DATADIR=/var/lib/kare/models/geniex`.
+5. Kare and GenieX restarted successfully, and both `/health` and `/v1/models` passed.
+6. Existing Kare and Azure command logs, GenieX cache data, and the old cloud catalog backup were deleted instead of copied.
+
+The service checkout, published Kare releases, protected configuration, and systemd user units remain on eMMC. No persistent logs, response-cache data, or backups were added to the NVMe layout. The bounded response cache remains process-local and starts empty after restart.
+
+The remaining storage work is narrow:
+
+1. Install `nvme-cli` and record SMART data, temperature, percentage used, and media errors.
+2. Investigate the Gen4 x1 negotiation through firmware, device tree, kernel, and physical seating checks.
+3. Measure cold model load, warm model load, and sustained temperature after the move.
+4. Add storage health metadata to the dashboard without exposing serial numbers, prompts, source code, or credentials.
+
+The first useful layout is:
+
+```
+/var/lib/kare/
+  models/geniex/
+  runtimes/geniex/
+```
+
+Keep model directories checksummed and versioned. Do not store prompts, source code, credentials, logs, cache entries, backups, or copied Copilot settings in a general-purpose storage directory just because it is large.
+
+The drive is a storage and startup improvement, not an inference accelerator. GenieX still owns token latency. NVMe should reduce cold model load time and move the native runtime and model data away from the boot eMMC.

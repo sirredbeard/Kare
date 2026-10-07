@@ -15,6 +15,7 @@ internal static class Program
 internal sealed class CopilotKareApp
 {
     private const string ConfigDirectoryName = "kare";
+    private const string CopilotLogDirectoryName = "copilot-logs";
     private const string LastDeviceHostFileName = "last-device-host";
     private const string DefaultLocalPort = "5285";
     private const string DefaultRemotePort = "5285";
@@ -56,6 +57,13 @@ internal sealed class CopilotKareApp
     private static async Task<int> RunCoreAsync(string[] args)
     {
         var input = LauncherInputParser.Parse(args);
+        if (input.Error is not null)
+        {
+            Console.Error.WriteLine(input.Error);
+            PrintUsage();
+            return 2;
+        }
+
         if (input.ShowHelp)
         {
             PrintUsage();
@@ -124,7 +132,7 @@ internal sealed class CopilotKareApp
 
             Console.WriteLine($"Kare is ready at {healthBaseUrl}. Starting GitHub Copilot with the BYOK provider.");
 
-            using var copilotProcess = StartCopilot(input.CopilotArguments, configValues, healthBaseUrl);
+            using var copilotProcess = StartCopilot(input, configValues, healthBaseUrl, configDirectory);
             await copilotProcess.WaitForExitAsync();
             return copilotProcess.ExitCode;
         }
@@ -327,9 +335,10 @@ internal sealed class CopilotKareApp
     }
 
     private static Process StartCopilot(
-        IReadOnlyList<string> copilotArguments,
+        LauncherInput input,
         IReadOnlyDictionary<string, string> configValues,
-        string healthBaseUrl)
+        string healthBaseUrl,
+        string configDirectory)
     {
         var copilotHome = GetSetting(
             configValues,
@@ -352,17 +361,104 @@ internal sealed class CopilotKareApp
         startInfo.Environment["COPILOT_PROVIDER_MODEL_ID"] = modelId;
         startInfo.Environment["COPILOT_MODEL"] = modelId;
         startInfo.Environment["COPILOT_PROVIDER_MAX_PROMPT_TOKENS"] =
-            GetSetting(configValues, "KARE_MAX_PROMPT_TOKENS", "7168");
+            GetSetting(configValues, "KARE_MAX_PROMPT_TOKENS", input.MinimalContext ? "7936" : "23552");
         startInfo.Environment["COPILOT_PROVIDER_MAX_OUTPUT_TOKENS"] =
-            GetSetting(configValues, "KARE_MAX_OUTPUT_TOKENS", "1024");
+            GetSetting(configValues, "KARE_MAX_OUTPUT_TOKENS", input.MinimalContext ? "256" : "1024");
         startInfo.Environment["COPILOT_HOME"] = copilotHome;
 
-        foreach (var argument in copilotArguments)
+        if (input.MinimalContext)
+        {
+            startInfo.Environment["COPILOT_OFFLINE"] = "true";
+            AddArgumentUnlessPresent(startInfo, input.CopilotArguments, "--disable-builtin-mcps");
+            AddArgumentUnlessPresent(startInfo, input.CopilotArguments, "--no-custom-instructions");
+            if (!ContainsArgument(input.CopilotArguments, "--available-tools"))
+            {
+                startInfo.ArgumentList.Add("--available-tools");
+                startInfo.ArgumentList.Add("bash");
+            }
+        }
+
+        if (input.Verbose)
+        {
+            var forwardedLogDirectory = GetOptionValue(input.CopilotArguments, "--log-dir");
+            if (input.LogDirectory is not null && forwardedLogDirectory is not null)
+            {
+                throw new InvalidOperationException(
+                    "Use either --kare-log-dir or Copilot's --log-dir option, not both.");
+            }
+
+            var logDirectory = input.LogDirectory ??
+                forwardedLogDirectory ??
+                Path.Combine(
+                    configDirectory,
+                    CopilotLogDirectoryName,
+                    $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{Environment.ProcessId}");
+            EnsurePrivateDirectory(logDirectory);
+            AddOptionUnlessPresent(startInfo, input.CopilotArguments, "--log-level", "debug");
+            AddOptionUnlessPresent(startInfo, input.CopilotArguments, "--log-dir", logDirectory);
+            Console.WriteLine($"Copilot debug logs: {logDirectory}");
+            Console.WriteLine(input.MinimalContext
+                ? "Copilot profile: minimal context, offline, builtin MCPs disabled, repository instructions disabled."
+                : "Copilot profile: measured 24k context with the full Copilot tool and instruction surface.");
+        }
+
+        foreach (var argument in input.CopilotArguments)
         {
             startInfo.ArgumentList.Add(argument);
         }
 
         return Process.Start(startInfo) ?? throw new InvalidOperationException("GitHub Copilot did not start.");
+    }
+
+    private static void AddArgumentUnlessPresent(
+        ProcessStartInfo startInfo,
+        IReadOnlyList<string> arguments,
+        string argument)
+    {
+        if (!ContainsArgument(arguments, argument))
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+    }
+
+    private static void AddOptionUnlessPresent(
+        ProcessStartInfo startInfo,
+        IReadOnlyList<string> arguments,
+        string option,
+        string value)
+    {
+        if (!ContainsArgument(arguments, option))
+        {
+            startInfo.ArgumentList.Add(option);
+            startInfo.ArgumentList.Add(value);
+        }
+    }
+
+    private static bool ContainsArgument(IReadOnlyList<string> arguments, string option)
+    {
+        return arguments.Any(argument =>
+            string.Equals(argument, option, StringComparison.Ordinal) ||
+            argument.StartsWith($"{option}=", StringComparison.Ordinal));
+    }
+
+    private static string? GetOptionValue(IReadOnlyList<string> arguments, string option)
+    {
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (argument.StartsWith($"{option}=", StringComparison.Ordinal))
+            {
+                return argument[(option.Length + 1)..];
+            }
+
+            if (string.Equals(argument, option, StringComparison.Ordinal) &&
+                index + 1 < arguments.Count)
+            {
+                return arguments[index + 1];
+            }
+        }
+
+        return null;
     }
 
     private static void StopProcess(Process process, string processName)
@@ -390,28 +486,113 @@ internal sealed class CopilotKareApp
         Console.WriteLine("Usage: copilot-kare [device-ip-or-host] [copilot args...]");
         Console.WriteLine("       copilot-kare [copilot args...]");
         Console.WriteLine();
+        Console.WriteLine("Launcher options:");
+        Console.WriteLine("  --kare-verbose          Capture Copilot CLI debug logs in protected local storage.");
+        Console.WriteLine("  --kare-log-dir PATH     Use PATH for Copilot CLI logs. Implies --kare-verbose.");
+        Console.WriteLine("  --kare-minimal-context  Use the offline 8192-token diagnostic profile with only bash.");
+        Console.WriteLine();
+        Console.WriteLine("The default profile uses the measured 24576-token GenieX context with Copilot tools,");
+        Console.WriteLine("builtin MCP servers, and repository instructions enabled.");
         Console.WriteLine("The explicit device address overrides environment and config values.");
         Console.WriteLine("Without one, the launcher uses KARE_DEVICE_HOST, protected config, or the last working address.");
     }
 }
 
-internal sealed record LauncherInput(string? DeviceHost, string[] CopilotArguments, bool ShowHelp);
+internal sealed record LauncherInput(
+    string? DeviceHost,
+    string[] CopilotArguments,
+    bool ShowHelp,
+    bool Verbose,
+    string? LogDirectory,
+    bool MinimalContext,
+    string? Error);
 
 internal static class LauncherInputParser
 {
     public static LauncherInput Parse(string[] args)
     {
-        if (args.Length > 0 && IsHelpArgument(args[0]))
+        var copilotArguments = new List<string>();
+        string? deviceHost = null;
+        string? logDirectory = null;
+        var verbose = false;
+        var minimalContext = false;
+        var parseLauncherOptions = true;
+
+        for (var index = 0; index < args.Length; index++)
         {
-            return new LauncherInput(null, [], true);
+            var argument = args[index];
+            if (parseLauncherOptions && argument is "--")
+            {
+                parseLauncherOptions = false;
+                continue;
+            }
+
+            if (parseLauncherOptions && IsHelpArgument(argument))
+            {
+                return new LauncherInput(null, [], true, false, null, false, null);
+            }
+
+            if (parseLauncherOptions && argument is "--kare-verbose")
+            {
+                verbose = true;
+                continue;
+            }
+
+            if (parseLauncherOptions && argument is "--kare-minimal-context")
+            {
+                minimalContext = true;
+                continue;
+            }
+
+            if (parseLauncherOptions &&
+                argument.StartsWith("--kare-log-dir=", StringComparison.Ordinal))
+            {
+                logDirectory = argument["--kare-log-dir=".Length..];
+                verbose = true;
+                if (string.IsNullOrWhiteSpace(logDirectory))
+                {
+                    return Error("--kare-log-dir requires a path.");
+                }
+
+                continue;
+            }
+
+            if (parseLauncherOptions && argument is "--kare-log-dir")
+            {
+                if (++index >= args.Length || string.IsNullOrWhiteSpace(args[index]))
+                {
+                    return Error("--kare-log-dir requires a path.");
+                }
+
+                logDirectory = args[index];
+                verbose = true;
+                continue;
+            }
+
+            if (parseLauncherOptions &&
+                deviceHost is null &&
+                copilotArguments.Count == 0 &&
+                !argument.StartsWith('-', StringComparison.Ordinal))
+            {
+                deviceHost = argument;
+                continue;
+            }
+
+            parseLauncherOptions = false;
+            copilotArguments.Add(argument);
         }
 
-        if (args.Length > 0 && !args[0].StartsWith('-', StringComparison.Ordinal))
-        {
-            return new LauncherInput(args[0], args[1..], false);
-        }
+        return new LauncherInput(
+            deviceHost,
+            [.. copilotArguments],
+            false,
+            verbose,
+            logDirectory,
+            minimalContext,
+            null);
 
-        return new LauncherInput(null, args, false);
+        static LauncherInput Error(string message) =>
+            new(null, [], false, false, null, false, message);
     }
 
     private static bool IsHelpArgument(string argument)

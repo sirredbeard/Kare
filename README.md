@@ -49,7 +49,7 @@ I am running Kare on an [Arduino VENTUNO Q](https://www.arduino.cc/product-ventu
 - Qualcomm Hexagon V75 NPU and Adreno 623 GPU.
 - 16 GB LPDDR5 memory.
 - 64 GB eMMC.
-- An M.2 NVMe slot for models, indexes, logs, and cache data.
+- A 512 GB OSCOO PCIe NVMe drive in the M.2 slot. It is mounted at `/var/lib/kare` and currently negotiates a PCIe Gen4 x1 link.
 
 The service is .NET 11. GitHub Copilot CLI runs on the workstation, `copilot-kare` opens a protected SSH tunnel to the board, and Kare listens on loopback.
 
@@ -66,6 +66,31 @@ Kare on the VENTUNO Q
         +-- explicit GitHub Copilot or configured cloud route
 ```
 
+## NVMe storage
+
+The board boots from eMMC. The model and native runtime data now live on a separate 512 GB NVMe drive mounted at `/var/lib/kare`.
+
+That split is deliberate. The NVMe read test reached 1.6 GB/s, compared with 294 MB/s from the eMMC. The drive also gives model files and native runtime files a replaceable home, so repeated model work does not grind on the boot device.
+
+The current layout is:
+
+```text
+/var/lib/kare/
+  models/geniex/       GenieX model data
+  runtimes/geniex/     GenieX Linux ARM64 runtime
+```
+
+The service checkout, published Kare releases, protected configuration, and systemd user units remain on eMMC. Kare does not retain persistent logs, response-cache data, or backups on the NVMe drive. The bounded response cache is process-local and starts empty after a restart.
+
+The drive currently negotiates PCIe Gen4 x1 even though the root port advertises x4. That is good enough to make the storage useful, however the link is still an open hardware investigation.
+
+To inspect the layout on the board:
+
+```bash
+findmnt -T /var/lib/kare
+du -sh /var/lib/kare/models /var/lib/kare/runtimes
+```
+
 ## What works today
 
 - OpenAI-compatible chat completions, streaming, usage, route metadata, and tool-call metadata.
@@ -77,7 +102,7 @@ Kare on the VENTUNO Q
 - An operations dashboard for routes, latency, cache metadata, skills, sources, and MCP status.
 - The cross-platform `copilot-kare` launcher.
 
-The main open problem is context. The next device experiment is a small GenieX GGUF model with an 8192-token context. It still has to pass tool-call, quality, latency, memory, and thermal checks.
+The first context problem is solved. Qwen3.5 0.8B Q4_0 now runs through GenieX with a measured 24576-token window, enough for Copilot CLI 1.0.92 to load all 26 tools, repository instructions, and the builtin GitHub MCP server. The model still has to pass representative coding quality, sustained latency, and thermal checks.
 
 ## Build the server for the Arduino
 
@@ -137,24 +162,25 @@ After the first healthy connection, the launcher remembers the last working addr
 
 `copilot-kare` opens the SSH tunnel, waits for Kare, supplies the Copilot BYOK environment, starts GitHub Copilot CLI, and cleans up the tunnel when Copilot exits.
 
+The board runs Qwen3.5 0.8B Q4_0 through GenieX with a 24576-token context. `copilot-kare` advertises 23552 prompt tokens and reserves 1024 output tokens, which fits Copilot CLI 1.0.92 with all 26 tools, repository instructions, and the builtin GitHub MCP server enabled.
+
+A full test prompt completed through Kare in 43 seconds with 22.9k input tokens. Kare limits the local cascade decision to the last 1024 request characters and 32 output tokens so Copilot's static wrapper does not spend two minutes in the routing gate.
+
+Use `--kare-minimal-context` for the earlier offline diagnostic profile. It disables builtin MCP servers and repository instructions, exposes only `bash`, advertises 7936 prompt tokens, and reserves 256 output tokens.
+
+Capture Copilot CLI debug logs in protected local storage with:
+
+```bash
+copilot-kare --kare-verbose -p "Test Kare"
+```
+
+The launcher prints the log directory. Use `--kare-log-dir PATH` when you need a specific protected location.
+
 ## Operations dashboard
 
-Kare includes a local dashboard at `/dashboard`. I use it to see which route answered, first-token and total latency, queue activity, cache metadata, configured model endpoints, skills, authoritative sources, and MCP connection state.
+Kare includes a local web dashboard on port `5285` at `/dashboard`. Open `http://127.0.0.1:5285/dashboard` on the Arduino itself, or forward port `5285` through the same SSH connection used by `copilot-kare` and open the forwarded local address in a browser.
 
-The dashboard stores operational metadata, not prompts, source code, generated responses, tokens, or protected config. Access and configuration details are in [Copilot instructions](.github/copilot-instructions.md#operations-dashboard).
-
-## Repo layout
-
-- `src/Kare.Service` - HTTP service, dashboard, and OpenAI-compatible endpoint.
-- `src/Kare.Core` - routing policy, limits, cache, and request handling.
-- `src/Kare.Cloud.Copilot` - GitHub Copilot SDK and configured cloud routes.
-- `src/Kare.Inference.GenieX` - local GenieX adapter.
-- `src/Kare.Inference.OnnxGenAI` - measured CPU fallback.
-- `src/Kare.CopilotLauncher` - cross-platform `copilot-kare` launcher.
-- `bench/Kare.DeviceProbe` - device and native runtime probe.
-- `findings/` - dated research and measured device results.
-- `plan.md` - architecture, open gates, and staged work.
-- `tests/Kare.Tests` - focused automated checks.
+The dashboard stores operational metadata, not prompts, source code, generated responses, tokens, or protected config. The access rules and feature list are in [Copilot instructions](.github/copilot-instructions.md#operations-dashboard).
 
 ## Related projects
 
