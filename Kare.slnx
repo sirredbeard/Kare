@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Kare.Abstractions/Kare.Abstractions.csproj" />
     <Project Path="src/Kare.Cloud.Copilot/Kare.Cloud.Copilot.csproj" />
+    <Project Path="src/Kare.CopilotLauncher/Kare.CopilotLauncher.csproj" />
     <Project Path="src/Kare.Core/Kare.Core.csproj" />
     <Project Path="src/Kare.Inference.OnnxGenAI/Kare.Inference.OnnxGenAI.csproj" />
     <Project Path="src/Kare.Service/Kare.Service.csproj" />

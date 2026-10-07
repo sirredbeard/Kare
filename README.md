@@ -1,86 +1,169 @@
 # Kare
 
-Kare is an authenticated OpenAI-compatible conduit for coding work. It is intended to run on an Arduino VENTUNO Q, use Qwen through GenieX as a bounded local answer-or-route gate, cache safe route decisions and deterministic results, maintain local skills and context, and escalate requests through GitHub Copilot or Microsoft Foundry. Kare owns a HydraFusion-inspired cascade and Lerna-inspired Foundry deployment mapping. It does not claim to run GitHub's native HydraFusion implementation or Lerna itself.
+Kare is a local gate for GitHub Copilot CLI BYOK. It keeps the device-side config outside the repo, exposes a small OpenAI-compatible `/v1` surface, and routes requests through a local model first before it considers a cloud or signed-in path.
 
-The project is in the early build stages. The research in `plan.md` still drives the design, and the first service skeleton, inference adapter, device probe, and build tooling now exist.
+I wanted GitHub Copilot to use a small model running on hardware I own, keep useful coding context nearby, and still have a deliberate route to bigger models when the local answer is not good enough. Kare is that experiment.
 
-## Contents
+The routing design borrows ideas from GitHub's [Project HydraFusion](https://github.blog/ai-and-ml/github-copilot/project-hydrafusion-frontier-quality-via-multi-model-orchestration/) and my [Lerna](https://github.com/sirredbeard/Lerna) project, however Kare owns it's routing, cache, policy, and OpenAI-compatible endpoint. It does not run HydraFusion or Lerna.
 
-- `plan.md` - research, architecture, risks, and staged build plan
-- `findings/` - low-format research notes, measurements, and source links
-- `src/Kare.Abstractions` - route, backend, and recording contracts
-- `src/Kare.Core` - bounds, admission control, route recording, route selection
-- `src/Kare.Inference.GenieX` - QCS8275 GenieX QAIRT adapter behind `IChatClient`
-- `src/Kare.Inference.OnnxGenAI` - ONNX Runtime GenAI adapter behind `IChatClient`
-- `src/Kare.Service` - OpenAI-compatible HTTP endpoint for Copilot CLI BYOK
-- `/dashboard` - local operations dashboard for routes, latency, workload, cache metadata, skills, and MCP status
-- `bench/Kare.DeviceProbe` - `kare-probe`, the device capability and benchmark tool
-- `build/` - pinned ARM64 build container and publish script
-- `tests/Kare.Tests` - unit tests
-- `.github/copilot-instructions.md` - instructions for future Copilot sessions
-- `examples/KARE_CONFIG_FILE.example.json` - repository-safe external cloud catalog example
+This project is still in research and development. The complete measurements are in [`findings/`](findings/), the current architecture is in [`plan.md`](plan.md), and the operational details are in [Copilot instructions](.github/copilot-instructions.md).
 
-## Target
+## How I got here
 
-The target device is an Arduino VENTUNO Q running Ubuntu 24.04.5 LTS on aarch64. The board has a Qualcomm Dragonwing IQ8 / QCS8275 platform, 16 GB LPDDR5 memory, 64 GB eMMC storage, a Hexagon NPU, an Adreno GPU, and an M.2 NVMe slot.
+The original idea was simple: put a small coding model on the edge, let it answer the cheap and repetitive requests, cache results that are actually safe to reuse, and send the difficult work to GitHub Copilot only when policy says it should.
 
-## Protected configuration
+The first runtime path was ONNX Runtime GenAI because it has a real .NET API, supports Linux ARM64, and keeps the service behind `IChatClient`. It worked. Microsoft Phi-4-mini INT4 loaded on the board and generated tokens, however one measured run needed 26.408 seconds for the first token and decoded at 7.17 tokens per second. Qwen3 1.7B was much better: 1.423 seconds to first token on the short prompt and 14.66 tokens per second.
 
-Repository defaults keep cloud routing disabled and define no cloud model catalog. Set `KARE_CONFIG_FILE` to an absolute path for a protected JSON override. The schema is demonstrated in `examples/KARE_CONFIG_FILE.example.json`. Copy it to a protected location, replace the placeholders, and do not commit the copy.
+Then I tested the same Qwen3 1.7B base model family through [Qualcomm GenieX](https://github.com/qualcomm/GenieX) on the Hexagon NPU. On the longer prompt, ONNX needed 5.208 seconds before the first token. GenieX processed the prompt in about 0.229 seconds and decoded about 1.6 times faster.
 
-The catalog keeps each public model ID separate from its provider wire deployment. GitHub Copilot routes use the signed-in Copilot account. Microsoft Foundry routes support the Responses and Anthropic Messages wires and may use a scoped Azure CLI bearer token. Kare does not run `az` for every model call. The Copilot SDK can request a token before a provider request, but Kare reuses the in-memory token for its remaining lifetime and invokes `az account get-access-token` only on a cold cache or when the token is within its two-minute refresh window. Keep the configuration file, Azure CLI state, endpoints, deployments, and credentials outside the repository with restrictive permissions.
+That made the runtime decision pretty easy. GenieX is the primary local path. ONNX Runtime GenAI stays as the CPU fallback because a local service should remain useful when the accelerator runtime is missing.
 
-Refresh the catalog from the account, not from the public model list alone. Use `az cognitiveservices account list-models` to find model definitions and `az cognitiveservices account deployment list` to find routes that can be tested immediately. Keep new routes explicit and out of automatic selection until streaming, cancellation, usage, tool behavior, latency, and cost have been measured. Availability is not proof that a model is cheaper.
+The failures shaped Kare just as much:
 
-## Host Copilot CLI through Kare
+- The stock TinyLlama ONNX graph offloaded only a small Shape/Gather/Cast subgraph to HTP. First-token latency regressed from 1.696 seconds on CPU to 4.683 seconds, and decode fell from about 23 to 17.31 tokens per second.
+- The first QAIRT Qwen bundle is fixed at 4096 tokens. Copilot CLI's starting prompt is already larger than that.
+- The five-prompt coding smoke test produced two exact answers from ONNX and two from GenieX. Neither model should write unreviewed patches.
+- ONNX sometimes emitted malformed fences. GenieX sometimes emitted empty reasoning tags. Kare has to normalize protocol details without quietly rewriting model output.
+- Copilot CLI extensions can add tools and commands, but the documented extension API cannot replace the model transport. BYOK is the supported route.
 
-When Kare is loopback-only on the device, `build/tunnel.sh` opens a protected SSH local forward, waits for Kare to become healthy, exports the documented Copilot CLI OpenAI-compatible provider variables, and starts Copilot:
+So Kare is deliberately conservative: local first, bounded context, explicit escalation, no silent billable fallback, and no pretending a small model is a frontier coding agent.
 
-```bash
-build/tunnel.sh
+## Design decisions
+
+- `Microsoft.Extensions.AI` and `IChatClient` are the service boundary. Native runtimes stay behind adapters.
+- GenieX is the default local runtime because it won the measured latency comparison on this board.
+- ONNX Runtime GenAI remains the CPU fallback because fallback is a normal operating mode, not an error.
+- GitHub Copilot CLI connects through BYOK to Kare's OpenAI-compatible endpoint.
+- GitHub Copilot SDK sessions are a separate cloud route. Kare does not claim they are the same session as a Copilot CLI TUI session.
+- Cache entries need model, prompt, repository revision, file hashes, policy, and version context. Raw prompt text is not a safe cache key.
+- Tool calls remain caller-owned. The board can return a requested tool call, but it does not get permission to edit the caller's repository.
+- Prompts, source code, generated responses, tokens, and provider credentials stay out of the dashboard and normal logs.
+
+## Hardware
+
+I am running Kare on an [Arduino VENTUNO Q](https://www.arduino.cc/product-ventuno-q) with:
+
+- Ubuntu 24.04.5 on ARM64.
+- Qualcomm Dragonwing IQ8 / QCS8275.
+- Eight Cortex-A55 and Cortex-A78C CPU cores.
+- Qualcomm Hexagon V75 NPU and Adreno 623 GPU.
+- 16 GB LPDDR5 memory.
+- 64 GB eMMC.
+- An M.2 NVMe slot for models, indexes, logs, and cache data.
+
+The service is .NET 11. GitHub Copilot CLI runs on the workstation, `copilot-kare` opens a protected SSH tunnel to the board, and Kare listens on loopback.
+
+```text
+GitHub Copilot CLI
+        |
+        | BYOK, OpenAI-compatible API
+        v
+Kare on the VENTUNO Q
+        |
+        +-- bounded cache and context
+        +-- Qwen through GenieX
+        +-- ONNX CPU fallback
+        +-- explicit GitHub Copilot or configured cloud route
 ```
 
-Arguments are forwarded to Copilot, for example `build/tunnel.sh -i "Review this repository"`. The tunnel closes when Copilot exits. The script reads `~/.config/kare/device.env`, which must remain mode `600`, and supports either `KARE_DEVICE_PASS` through `sshpass` or normal SSH key authentication. It uses an isolated `COPILOT_HOME` at `~/.config/kare/copilot-home` by default so normal Copilot plugins and Lerna settings cannot intercept the BYOK session. Override it with `KARE_COPILOT_HOME` only when that isolation is not wanted.
+## What works today
 
-The OpenAI-compatible `/v1` API still requires `KARE_API_KEY`. Kare advertises one public model, `kare`. The launcher defaults to 7,168 prompt tokens and 1,024 output tokens for the current 8,192-token GenieX model. Override these with `KARE_MAX_PROMPT_TOKENS` and `KARE_MAX_OUTPUT_TOKENS` only when the deployed model has a different measured context window. Each request follows one bounded policy: cached cloud target, compact tool-free Qwen decision, then ordered cloud escalation. The GenieX gate disables extended model thinking so the answer-or-route marker fits its small latency and output budget. Tool-bearing requests send bounded tool names to the gate but skip bulk authoritative content because local answering is not allowed for those requests. They are limited to catalog entries that explicitly support caller-owned tools. Kare does not send Copilot's full tool-heavy request to GenieX.
+- OpenAI-compatible chat completions, streaming, usage, route metadata, and tool-call metadata.
+- Qwen3 through GenieX on the VENTUNO Q.
+- Qwen3 and Phi-4-mini through ONNX Runtime GenAI on ARM64.
+- A bounded local answer-or-route decision.
+- GitHub Copilot SDK text and caller-owned tool-call routes.
+- A response cache with bounded metadata.
+- An operations dashboard for routes, latency, cache metadata, skills, sources, and MCP status.
+- The cross-platform `copilot-kare` launcher.
 
-## Device iteration
+The main open problem is context. The next device experiment is a small GenieX GGUF model with an 8192-token context. It still has to pass tool-call, quality, latency, memory, and thermal checks.
 
-Use framework-dependent JIT builds for normal development on the VENTUNO Q:
+## Build the server for the Arduino
+
+This is the setup I use today. It is a development setup, not an installer.
+
+On the VENTUNO Q:
+
+1. Install Git.
+2. Clone Kare.
+3. Install the .NET 11 SDK into `.dotnet` inside the checkout.
+4. Put service settings outside the repository and create the `kare.service` user unit described in [Copilot instructions](.github/copilot-instructions.md#device-iteration).
+5. Publish, test, deploy, restart, and health-check the service:
 
 ```bash
-~/.local/bin/kare-sync
-cd ~/Kare
-build/device-publish.sh --jit --test
+git clone https://github.com/sirredbeard/Kare.git
+cd Kare
+./build/device-publish.sh --test
 ```
 
-The device service must have `DOTNET_ROOT` set to the project-local `.NET 11` installation, normally `~/Kare/.dotnet`. The board's global .NET 10 runtime cannot run Kare's `net11.0` build.
+The script creates a commit-specific release, switches the `current` symlink, restarts the user service, and waits for `/health`.
 
-Native AOT remains supported, but it is a release validation path rather than the normal edit and test loop:
+## Build `copilot-kare`
+
+The launcher is a trimmed, compressed, self-contained .NET 11 application. Build it on a workstation with the .NET 11 SDK:
 
 ```bash
-build/device-publish.sh --aot --test
+dotnet publish src/Kare.CopilotLauncher/Kare.CopilotLauncher.csproj \
+  -c Release \
+  -r linux-x64 \
+  -o artifacts/copilot-kare-linux-x64
 ```
 
-The JIT and AOT modes deploy to separate versioned release directories and update the same `~/kare/service/current` symlink atomically.
+Supported runtime identifiers:
+
+- `linux-x64`
+- `linux-arm64`
+- `win-x64`
+- `win-arm64`
+- `osx-x64`
+- `osx-arm64`
+
+Replace `linux-x64` in the publish command with the target runtime identifier. The Windows output is `copilot-kare.exe`; Linux and macOS use `copilot-kare`.
+
+Put the device connection and API key in the external config described in [Copilot instructions](.github/copilot-instructions.md#protected-configuration). Do not put them in this repository.
+
+Start GitHub Copilot through Kare with the device address:
+
+```bash
+./artifacts/copilot-kare-linux-x64/copilot-kare YOUR_DEVICE_ADDRESS -i "Review this repository"
+```
+
+After the first healthy connection, the launcher remembers the last working address:
+
+```bash
+./artifacts/copilot-kare-linux-x64/copilot-kare -i "Review this repository"
+```
+
+`copilot-kare` opens the SSH tunnel, waits for Kare, supplies the Copilot BYOK environment, starts GitHub Copilot CLI, and cleans up the tunnel when Copilot exits.
 
 ## Operations dashboard
 
-Kare serves the operations dashboard from the device at `http://<device-address>:5285/dashboard`. It shows recent route decisions, first-token and total latency, decode rate, fallback and billable routes, a pie chart of request distribution across configured model endpoints, per-model token usage, inference workload, response-cache metadata, authoritative web sources, skills, and MCP server state. The dashboard stores metadata only. It does not store prompts or generated responses.
+Kare includes a local dashboard at `/dashboard`. I use it to see which route answered, first-token and total latency, queue activity, cache metadata, configured model endpoints, skills, authoritative sources, and MCP connection state.
 
-The dashboard page and dashboard API do not require an API key. They are reachable only from loopback and the CIDR ranges in `Kare:Service:AllowedNetworks`; `NetworkAllowListMiddleware` rejects every other caller before dashboard routing. Keep the device listener and allow-list in protected device configuration. Repository defaults remain loopback-only. The OpenAI-compatible `/v1` API remains bearer-authenticated even for allowed LAN callers.
+The dashboard stores operational metadata, not prompts, source code, generated responses, tokens, or protected config. Access and configuration details are in [Copilot instructions](.github/copilot-instructions.md#operations-dashboard).
 
-Dashboard controls can delete individual cache entries or clear the response cache, add and remove skills from absolute device file paths or public HTTPS URLs, add and remove HTTPS wildcard source patterns, and add and probe Streamable HTTP MCP endpoints. Source patterns and URL-backed skills are refreshed every 15 minutes with fixed byte and context limits. Successfully loaded content and enabled skills are added to the local Qwen gate. Connected MCP names and advertised capabilities are added as advisory metadata, but Kare does not execute MCP tools or claim that a server was called. Registry configuration is stored outside the repository under the service account's local application data directory.
+## Repo layout
 
-The response cache remains conservative for generated answers. Copilot requests that stream or carry tools are not answer-cached. The cascade may cache only the selected cloud route ID using a key that includes the current source, skill, and MCP context version, candidate catalog, tool declarations, and compact decision request. It never stores prompt or response text in a cascade-route entry.
-
+- `src/Kare.Service` - HTTP service, dashboard, and OpenAI-compatible endpoint.
+- `src/Kare.Core` - routing policy, limits, cache, and request handling.
+- `src/Kare.Cloud.Copilot` - GitHub Copilot SDK and configured cloud routes.
+- `src/Kare.Inference.GenieX` - local GenieX adapter.
+- `src/Kare.Inference.OnnxGenAI` - measured CPU fallback.
+- `src/Kare.CopilotLauncher` - cross-platform `copilot-kare` launcher.
+- `bench/Kare.DeviceProbe` - device and native runtime probe.
+- `findings/` - dated research and measured device results.
+- `plan.md` - architecture, open gates, and staged work.
+- `tests/Kare.Tests` - focused automated checks.
 
 ## Related projects
 
 - [Arduino VENTUNO Q](https://www.arduino.cc/product-ventuno-q)
-- [Arduino VENTUNO Q documentation](https://docs.arduino.cc/hardware/ventuno-q/)
-- [ONNX Runtime GenAI](https://github.com/microsoft/onnxruntime-genai)
-- [GitHub Copilot SDK](https://github.com/github/copilot-sdk)
-- [Lerna](https://github.com/sirredbeard/Lerna)
 - [Project HydraFusion](https://github.blog/ai-and-ml/github-copilot/project-hydrafusion-frontier-quality-via-multi-model-orchestration/)
+- [Lerna](https://github.com/sirredbeard/Lerna)
+- [GitHub Copilot CLI](https://github.com/github/copilot-cli)
+- [GitHub Copilot SDK](https://github.com/github/copilot-sdk)
+- [Microsoft.Extensions.AI](https://learn.microsoft.com/dotnet/ai/microsoft-extensions-ai)
+- [Qualcomm GenieX](https://github.com/qualcomm/GenieX)
+- [ONNX Runtime GenAI](https://github.com/microsoft/onnxruntime-genai)
 - [Qualcomm AI Hub](https://aihub.qualcomm.com/)
