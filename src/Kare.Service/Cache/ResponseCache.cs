@@ -74,12 +74,15 @@ public sealed class ResponseCache : IDisposable
             return false;
         }
 
+        var descriptor = BuildDescriptor(messages, response);
         _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
             key,
             DateTime.UtcNow,
             DateTime.UtcNow,
             CountBytes(response!),
-            "application/json"));
+            "application/json",
+            Keywords: descriptor.Keywords,
+            TaskClass: descriptor.TaskClass));
         return true;
     }
 
@@ -127,12 +130,15 @@ public sealed class ResponseCache : IDisposable
             PersistLocked();
         }
 
+        var descriptor = BuildDescriptor(messages, response);
         _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
             key,
             DateTime.UtcNow,
             LastAccessedAt: null,
             CountBytes(response),
-            "application/json"));
+            "application/json",
+            Keywords: descriptor.Keywords,
+            TaskClass: descriptor.TaskClass));
     }
 
     /// <summary>Gets a cached cloud target selected by the local cascade gate.</summary>
@@ -156,12 +162,15 @@ public sealed class ResponseCache : IDisposable
         }
 
         target = cachedTarget;
+        var descriptor = BuildDescriptor(decisionMessages, response: null);
         _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
             key,
             DateTime.UtcNow,
             DateTime.UtcNow,
             Encoding.UTF8.GetByteCount(cachedTarget),
-            "application/vnd.kare.cascade-route"));
+            "application/vnd.kare.cascade-route",
+            Keywords: descriptor.Keywords,
+            TaskClass: descriptor.TaskClass));
         return true;
     }
 
@@ -205,12 +214,15 @@ public sealed class ResponseCache : IDisposable
             PersistLocked();
         }
 
+        var descriptor = BuildDescriptor(decisionMessages, response: null);
         _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
             key,
             DateTime.UtcNow,
             LastAccessedAt: null,
             Encoding.UTF8.GetByteCount(target),
-            "application/vnd.kare.cascade-route"));
+            "application/vnd.kare.cascade-route",
+            Keywords: descriptor.Keywords,
+            TaskClass: descriptor.TaskClass));
     }
 
     /// <summary>Removes a cached response by its opaque hash key.</summary>
@@ -346,6 +358,7 @@ public sealed class ResponseCache : IDisposable
                 });
             _keys.Add(entry.Key);
             _persistentEntries[entry.Key] = entry;
+            var classified = ContentClassifier.Classify(entry.Text ?? entry.Target ?? string.Empty);
             _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
                 entry.Key,
                 entry.CreatedAt,
@@ -355,10 +368,32 @@ public sealed class ResponseCache : IDisposable
                     : Encoding.UTF8.GetByteCount(entry.Text),
                 entry.Kind == CascadeKind
                     ? "application/vnd.kare.cascade-route"
-                    : "application/json"));
+                    : "application/json",
+                Keywords: classified.Keywords,
+                TaskClass: classified.TaskClass));
         }
 
         PersistLocked();
+    }
+
+    /// <summary>
+    /// Computes a bounded, fixed-vocabulary descriptor for dashboard display from in-memory
+    /// request/response text. Never persisted and never includes the original prompt or
+    /// response text itself, only normalized keyword/task-class tags from a closed vocabulary.
+    /// </summary>
+    private static (IReadOnlyList<string> Keywords, string? TaskClass) BuildDescriptor(
+        IReadOnlyList<ChatMessage> messages,
+        ChatResponse? response)
+    {
+        var requestText = string.Join(
+            "\n",
+            messages
+                .SelectMany(static message => message.Contents.OfType<TextContent>())
+                .Select(static content => content.Text));
+        var combined = response is null
+            ? requestText
+            : requestText + "\n" + response.Text;
+        return ContentClassifier.Classify(combined);
     }
 
     private void RemoveMissingEntry(string key)

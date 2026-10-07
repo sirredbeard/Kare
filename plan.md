@@ -39,11 +39,12 @@ OpenAI-compatible request
   -> route and usage record
 ```
 
-Request-specific source, skill, and MCP metadata selection is now implemented, as are bounded tool-route decisions, cloud result judging, critique, and route-context cache identity. The immediate defects are operational and intake related:
+Request-specific source, skill, and MCP metadata selection is now implemented, as are bounded tool-route decisions, cloud result judging, critique, and route-context cache identity. Issue #4's paste-field intake flow, bounded proposal lifecycle, built-in skills, and classification/descriptor metadata (source topics and headings, skill tags, MCP keywords, cache keywords/task class) are now implemented; see [Dashboard intake](.github/copilot-instructions.md#dashboard-intake) for the shipped behavior and the gaps noted there. The remaining defects are operational and intake related:
 
 - FastRPC can degrade after long uptime and may require a bounded GenieX recycle.
 - The current recovery bridge still invokes the external user service. Kare should own the sidecar lifecycle directly.
-- Dashboard source, skill, and MCP intake still asks for normalized schema fields instead of interpreting the value the user actually has.
+- Intake has no cloud escalation path: when local structured interpretation of ambiguous paste text is invalid, the proposal stays in `Review` rather than calling cloud, by design, until a safe escalation policy without a `ContextEnrichingChatClient` DI cycle or hidden billing is designed.
+- The crawler does not yet enforce path-prefix allow/deny lists beyond the existing pattern match and public-address validation.
 - Dashboard workload counters are sampled after inference completes, so active requests can appear as zero during live work.
 - Model call accounting does not yet show published-price spend estimates or local avoided cost.
 
@@ -66,7 +67,7 @@ request
 ### Workstream order
 
 1. **Finish NPU lifecycle ownership.** Keep the warning and bounded health state machine, then replace the temporary systemd command bridge with a Kare-owned GenieX process boundary. Do not reboot the device automatically.
-2. **Finish #4 as the context broker intake.** Keep the existing bounded registries and selection. Add one-field source, skill, and MCP intake, structured proposals, preview and approval, deterministic validation, provenance, refresh state, and protected persistence.
+2. **#4 context broker intake: done.** One-field source, skill, and MCP paste intake, structured proposals (`DashboardIntakeService`), preview/approval for ambiguous or risky input, deterministic validation, provenance, refresh state, protected persistence, endpoint redaction, pre-seeded built-in skills, and classification descriptors (topics/headings/tags/keywords) are implemented and tested. Open gap: no cloud escalation for unresolved intake text; it stays in `Review` instead.
 3. **Fix live dashboard accounting.** Read queue and active inference state while requests are running. Add versioned published-price estimates, cloud-equivalent local savings, and explicit unknown-price behavior.
 4. **Tighten remaining cache identity.** Add source chunks, MCP result hashes, privacy class, intake-skill version, parser version, and accepted proposal hashes where each cache needs them.
 5. **Complete the measured #5 policy.** Keep the bounded route gate, result checks, judge, critique, sticky provider routing, and complete accounting. Add a representative corpus and tune from device measurements.
@@ -582,6 +583,8 @@ The first dashboard surface should show:
 Dashboard metrics remain bounded and process-local. The knowledge registry now uses a protected restart-safe snapshot for source registrations and content, remote skills, context version, MCP registrations, and last-known capabilities. The page and API remain behind Kare's explicit CIDR network allow-list but do not require a bearer token on the trusted LAN. The OpenAI-compatible API remains bearer-authenticated. Repository defaults must remain loopback-only and must not contain a development password, device subnet, or API key.
 
 Kare now owns bounded registries for authoritative HTTPS source patterns, skills loaded from explicit absolute device paths or public HTTPS URLs, and Streamable HTTP MCP endpoints. Source patterns and remote skills are periodically refreshed with fixed page, byte, and injected-context limits. Enabled source and skill content is added only to local inference. MCP status comes from Kare's own initialize probes. Kare does not scan arbitrary home directories or copy Copilot settings to populate these registries.
+
+These registries are populated through one paste field per section rather than separate structured forms; see [Dashboard intake](.github/copilot-instructions.md#dashboard-intake) for the proposal lifecycle, approval rules, and the classification descriptors (topics/headings, tags, keywords) that let the local model recognize relevant context without full-content injection.
 
 ## Persistence and context memory
 

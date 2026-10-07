@@ -239,6 +239,35 @@ Dashboard metrics remain process-local. The bounded knowledge registry is restar
 
 The dashboard registry must not scan arbitrary home directories or import GitHub Copilot settings. Remote sources and skills need fixed page, byte, refresh, and injected-context limits.
 
+## Dashboard intake
+
+Authoritative sources, skills, and MCP servers are added through one paste field per section (`/dashboard/api/intake/{source|skill|mcp}`), not separate structured forms. Pasted input can be a URL, a GitHub repository, a direct `SKILL.md` URL, an absolute device path, package/plugin/install command text, or an MCP endpoint.
+
+Kare never executes pasted command text. It parses install/package command text as data only, to recover a candidate name, and marks the result for review when the command cannot be resolved to a direct, safe input.
+
+Each paste produces a proposal record with a bounded status lifecycle: `Resolving`, `Fetching`, `Review`, `Indexing`, `Active`, `Stale`, `Failed`, `Disabled`. Deterministic classification decides the status:
+
+- Safe, direct, same-origin inputs (an exact HTTPS URL pattern, an existing absolute skill path, a well-formed MCP endpoint without embedded credentials) may resolve straight to `Active` without a manual approval step.
+- Ambiguous text, cross-origin or redirect-involving inputs, credential-bearing endpoints, broad path patterns, and anything that would imply a billable route are held in `Review` for manual approval before anything is fetched or enabled.
+- A local model may be consulted to interpret ambiguous text into a structured proposal, but Kare's own deterministic validation decides what gets applied. There is no cloud escalation path for intake today: if local structured output is invalid, the proposal stays in `Review` rather than silently calling a cloud model.
+
+Proposals persist across restarts in the same protected state directory as the knowledge registry. Approving, retrying, disabling, or deleting a proposal is explicit; disabling an active proposal removes the underlying source, skill, or MCP registry record.
+
+MCP endpoint query strings and fragments are redacted before anything reaches the dashboard, in both the intake flow and the existing MCP registry view.
+
+### Built-in skills
+
+Kare ships a small set of versioned, built-in skills that are separate from user-managed skill records: they cannot be deleted through the dashboard and do not count against `MaxSkills`. They cover Kare identity and architecture, VENTUNO Q deployment and the local-vs-caller execution boundary, safe service/dashboard/log triage, issue evidence collection, and source/skill/MCP intake itself. Only the built-ins relevant to the current request are selected for injection, the same way user skill bodies are selected. The execution-boundary skill explicitly guards against Kare claiming the caller's workstation or cloud session is the Kare device, or looking for device logs under the caller's filesystem. Built-in skill content carries no host addresses, usernames, credentials, or protected config values.
+
+### Classification and progressive disclosure
+
+Sources, skills, MCP servers, and cache entries carry a bounded, fixed-vocabulary descriptor (keywords/topics, task class, and for sources a short table-of-contents of page headings) computed by `ContentClassifier`. This lets the local model recognize that a relevant source, skill, or MCP server exists and fetch or select it on demand, instead of defaulting to cloud, without Kare retaining full page content, full skill bodies, or prompt text beyond what the existing bounded context and cache policy already allow:
+
+- Authoritative sources: a compact, always-injected catalog of known source patterns and topics (bounded separately within the existing source-context budget) lets the model recognize a source exists even when its full content is not selected for the current request.
+- Skills: tags/keywords drive selection so only project/language/task-relevant skill bodies are injected, for example a Go skill for a Go request and not an unrelated .NET skill.
+- MCP servers: keywords derived from server name, capabilities, and tool names/descriptions narrow a larger registry down to the servers relevant to a request.
+- Cache entries: keywords and task class are derived from the live request/response text at write time (and, best-effort, from already-persisted text on restore) and are never a substitute for storing the original prompt; they are a closed-vocabulary descriptor only.
+
 ## Repository layout
 
 - `src/Kare.Service` - HTTP service, dashboard, and OpenAI-compatible endpoint.

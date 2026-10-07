@@ -254,6 +254,69 @@ public sealed class DashboardTests
     }
 
     [Fact]
+    public async Task LocalContextSelectsGoSkillAndExcludesUnrelatedDotnetSkillForGoRequest()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var goPath = Path.Combine(directory, "go-errors.md");
+        var dotnetPath = Path.Combine(directory, "dotnet-di.md");
+        var statePath = Path.Combine(directory, "registry.json");
+        await File.WriteAllTextAsync(
+            goPath,
+            "Wrap Go errors with fmt.Errorf and the %w verb for unwrapping.",
+            TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            dotnetPath,
+            "Register dotnet services with AddSingleton for dependency injection.",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var collector = new InMemoryMetricsCollector();
+            var service = new DashboardKnowledgeService(
+                collector,
+                new StaticHttpClientFactory(),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await service.AddSkillAsync(
+                new CreateDashboardSkillRequest("go-errors", goPath, "Go error wrapping", Enabled: true),
+                TestContext.Current.CancellationToken);
+            await service.AddSkillAsync(
+                new CreateDashboardSkillRequest("dotnet-di", dotnetPath, "dotnet dependency injection", Enabled: true),
+                TestContext.Current.CancellationToken);
+
+            var enriched = await service.AddLocalContextAsync(
+                [new ChatMessage(ChatRole.User, "How do I wrap a Go error for unwrapping?")],
+                TestContext.Current.CancellationToken);
+            var context = enriched[0].Contents.OfType<TextContent>().Single().Text;
+
+            Assert.Contains("Wrap Go errors with fmt.Errorf", context, StringComparison.Ordinal);
+            Assert.DoesNotContain("AddSingleton for dependency injection", context, StringComparison.Ordinal);
+
+            var goSkill = Assert.Single(collector.GetSkills(), item => item.Name == "go-errors");
+            var dotnetSkill = Assert.Single(collector.GetSkills(), item => item.Name == "dotnet-di");
+            Assert.Contains("go", goSkill.Tags!);
+            Assert.Contains("dotnet", dotnetSkill.Tags!);
+            Assert.DoesNotContain("dotnet", goSkill.Tags!);
+            Assert.DoesNotContain("go", dotnetSkill.Tags!);
+        }
+        finally
+        {
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task EnabledHttpsSkillIsFetchedAndInjectedIntoLocalContext()
     {
         var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
@@ -559,6 +622,42 @@ public sealed class DashboardTests
     }
 
     [Fact]
+    public async Task McpServerKeywordsAreDerivedFromToolNamesAndDescriptions()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new KeywordMcpToolResponseHandler());
+
+        try
+        {
+            var collector = new InMemoryMetricsCollector();
+            var service = new DashboardKnowledgeService(
+                collector,
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+
+            await service.AddMcpServerAsync(
+                new CreateDashboardMcpServerRequest("deploy-tools", "https://1.1.1.1/mcp"),
+                TestContext.Current.CancellationToken);
+
+            var server = Assert.Single(collector.GetMcpServers());
+            Assert.Contains("deploy", server.Keywords!);
+            Assert.Contains("docker", server.Keywords!);
+        }
+        finally
+        {
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task LocalContextMergesWithExistingLeadingSystemMessage()
     {
         var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
@@ -649,6 +748,50 @@ public sealed class DashboardTests
         }
     }
 
+    [Fact]
+    public async Task CrawledSourceRecordsTopicsAndHeadingsForTableOfContentsRecognition()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new StaticResponseHandler(
+            """
+            # Deploying with Docker
+
+            Use Go and Docker for the deployment pipeline.
+            """,
+            "text/markdown"));
+
+        try
+        {
+            var collector = new InMemoryMetricsCollector();
+            var service = new DashboardKnowledgeService(
+                collector,
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+
+            await service.AddSourceAsync(
+                new CreateAuthoritativeSourceRequest("https://1.1.1.1/reference"),
+                TestContext.Current.CancellationToken);
+
+            var route = Assert.Single(collector.GetRoutingDecisionUrls());
+            Assert.Contains("go", route.Topics!);
+            Assert.Contains("docker", route.Topics!);
+            Assert.Contains("deploy", route.Topics!);
+            Assert.Contains("Deploying with Docker", route.Headings!);
+        }
+        finally
+        {
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static DashboardMetrics.RequestMetric CreateRequest(
         long inputTokens,
         long outputTokens,
@@ -703,6 +846,23 @@ public sealed class DashboardTests
             var body = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult() ?? string.Empty;
             var content = body.Contains("tools/list", StringComparison.Ordinal)
                 ? """{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"inspect_repository","description":"x","inputSchema":{"type":"object","properties":{"path":{"type":"string"}}}},{"name":"mutate_repository","description":"y","inputSchema":{"type":"object"}}]}}"""
+                : """{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}}}}""";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
+    private sealed class KeywordMcpToolResponseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var body = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult() ?? string.Empty;
+            var content = body.Contains("tools/list", StringComparison.Ordinal)
+                ? """{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"deploy_image","description":"Deploy the docker image to production","inputSchema":{"type":"object"}}]}}"""
                 : """{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}}}}""";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {

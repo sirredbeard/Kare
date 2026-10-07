@@ -71,14 +71,19 @@ public static class DashboardMetrics
         string Backend);
 
     /// <summary>
-    /// Cache entry for dashboard view/delete operations.
+    /// Cache entry for dashboard view/delete operations. <see cref="Keywords"/> and
+    /// <see cref="TaskClass"/> are a bounded intersection with a fixed vocabulary
+    /// (<see cref="ContentClassifier"/>), computed from in-memory request/response text and
+    /// never derived from or containing the original prompt or response content.
     /// </summary>
     public record CacheEntry(
         string Key,
         DateTime CreatedAt,
         DateTime? LastAccessedAt,
         long SizeBytes,
-        string ContentType);
+        string ContentType,
+        IReadOnlyList<string>? Keywords = null,
+        string? TaskClass = null);
 
     /// <summary>
     /// SLM workload snapshot.
@@ -91,7 +96,10 @@ public static class DashboardMetrics
         double AverageTimeToFirstTokenMs);
 
     /// <summary>
-    /// Authoritative web source crawled for local model context.
+    /// Authoritative web source crawled for local model context. <see cref="Topics"/> and
+    /// <see cref="Headings"/> are a bounded table-of-contents style descriptor so the route
+    /// gate can recognize a source exists even when its full content is not selected for
+    /// injection into the current request.
     /// </summary>
     public record RoutingDecisionUrl(
         string Id,
@@ -103,10 +111,14 @@ public static class DashboardMetrics
         int PageCount,
         int ContentCharacters,
         string Status,
-        string? Error);
+        string? Error,
+        IReadOnlyList<string>? Topics = null,
+        IReadOnlyList<string>? Headings = null);
 
     /// <summary>
-    /// Skill available to SLM.
+    /// Skill available to SLM. <see cref="Tags"/> is a bounded language/framework/task
+    /// descriptor used for progressive disclosure: only skills whose tags or keywords match
+    /// the current request are selected for full-body injection.
     /// </summary>
     public record SkillInfo(
         string Name,
@@ -115,10 +127,13 @@ public static class DashboardMetrics
         bool Enabled,
         long SizeBytes,
         DateTime LastModifiedAt,
-        string Status);
+        string Status,
+        IReadOnlyList<string>? Tags = null);
 
     /// <summary>
-    /// MCP server linked to SLM.
+    /// MCP server linked to SLM. <see cref="Keywords"/> is a bounded task/capability
+    /// descriptor derived from advertised capabilities and tool names so a larger registry
+    /// can be filtered by request relevance instead of injecting every connected server.
     /// </summary>
     public record McpServerInfo(
         string Name,
@@ -128,7 +143,9 @@ public static class DashboardMetrics
         DateTime? LastConnectedAt,
         DateTime? LastCheckedAt,
         string? Error,
-        IReadOnlyList<McpToolInfo>? Tools = null);
+        IReadOnlyList<McpToolInfo>? Tools = null,
+        IReadOnlyList<string>? Keywords = null);
+
 
     /// <summary>Bounded MCP tool metadata used for request-specific knowledge selection.</summary>
     public record McpToolInfo(

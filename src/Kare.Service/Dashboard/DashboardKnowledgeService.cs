@@ -56,12 +56,16 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     private const int MaxMcpServers = 50;
     private const int MaxPagesPerSource = 20;
     private const int MaxPageBytes = 512 * 1024;
+    private const int MaxHeadingsPerSource = 8;
+    private const int MaxHeadingLength = 80;
     private const int MaxSourceCharacters = 256 * 1024;
     private const int MaxSkillBytes = 256 * 1024;
     private const int MaxInjectedCharacters = 12_000;
     private const int SourceContextBudget = 6_000;
     private const int SkillContextBudget = 4_500;
     private const int McpContextBudget = 1_500;
+    private const int KnownSourceCatalogBudget = 800;
+    private const int MaxKnownSourceCatalogEntries = 20;
     private const int MaxSelectedSkills = 3;
     private const int MaxSelectedSources = 5;
     private const int MaxSelectedMcpServers = 5;
@@ -344,6 +348,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         var skillContext = new StringBuilder(SkillContextBudget);
         var mcpContext = new StringBuilder(McpContextBudget);
 
+        AppendKnownSourceCatalog(sourceContext, sources);
+
         foreach (var source in selectedSources)
         {
             string? sourceContent;
@@ -384,6 +390,14 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             AppendBounded(
                 skillContext,
                 $"\nSkill: {skill.Name}\nLocation: {skill.Path}\n{skillContent}\n",
+                SkillContextBudget);
+        }
+
+        foreach (var builtin in BuiltinSkills.SelectRelevant(requestText))
+        {
+            AppendBounded(
+                skillContext,
+                $"\nBuilt-in skill: {builtin.Title} (v{builtin.Version})\n{builtin.Content}\n",
                 SkillContextBudget);
         }
 
@@ -504,7 +518,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 Server: server,
                 Score: ScoreText(
                     requestTerms,
-                    $"{server.Name} {string.Join(' ', server.Capabilities)}")))
+                    $"{server.Name} {string.Join(' ', server.Capabilities)} " +
+                    $"{string.Join(' ', server.Keywords ?? [])}")))
             .Where(static item => item.Score > 0)
             .ToArray();
 
@@ -535,6 +550,35 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         return all
             .Take(maximum)
             .ToArray();
+    }
+
+    private void AppendKnownSourceCatalog(
+        StringBuilder destination,
+        IReadOnlyList<SourceRegistration> sources)
+    {
+        if (sources.Count == 0)
+        {
+            return;
+        }
+
+        var metricsById = _collector.GetRoutingDecisionUrls()
+            .ToDictionary(static metric => metric.Id, StringComparer.Ordinal);
+        var lines = new List<string>(Math.Min(sources.Count, MaxKnownSourceCatalogEntries));
+        foreach (var source in sources.Take(MaxKnownSourceCatalogEntries))
+        {
+            metricsById.TryGetValue(source.Id, out var metric);
+            var topics = metric?.Topics is { Count: > 0 }
+                ? string.Join(", ", metric.Topics)
+                : "(not yet crawled)";
+            lines.Add($"- {source.Pattern}: {topics}");
+        }
+
+        AppendBounded(
+            destination,
+            "\nKnown authoritative sources (fetch the matching URL on demand instead of " +
+            "defaulting to general knowledge when a topic below matches the request):\n" +
+            string.Join('\n', lines) + "\n",
+            KnownSourceCatalogBudget);
     }
 
     private static void AppendRelevantSource(
@@ -684,6 +728,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         var seed = CreateSeedUri(source.Pattern);
         pending.Enqueue(seed);
         var content = new StringBuilder();
+        var headings = new List<string>();
 
         try
         {
@@ -715,6 +760,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                     response.Content,
                     MaxPageBytes,
                     cancellationToken).ConfigureAwait(false);
+                AppendPageHeadings(headings, body, mediaType);
                 content.AppendLine($"\nSource URL: {uri}");
                 content.AppendLine(ToPlainText(body));
 
@@ -739,6 +785,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             var value = content.Length > MaxSourceCharacters
                 ? content.ToString(0, MaxSourceCharacters)
                 : content.ToString();
+            var topics = ContentClassifier.ExtractKeywords(value, maxKeywords: 12);
             bool changed;
             lock (_sync)
             {
@@ -761,7 +808,9 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 visited.Count,
                 value.Length,
                 "ready",
-                Error: null));
+                Error: null,
+                Topics: topics,
+                Headings: headings));
             if (persist)
             {
                 await PersistAsync(cancellationToken).ConfigureAwait(false);
@@ -859,13 +908,14 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
             var metric = new DashboardMetrics.McpServerInfo(
                 server.Name,
-                server.Endpoint.ToString(),
+                EndpointRedaction.Redact(server.Endpoint),
                 capabilities,
                 Connected: true,
                 LastConnectedAt: now,
                 LastCheckedAt: now,
                 Error: null,
-                Tools: tools);
+                Tools: tools,
+                Keywords: BuildMcpKeywords(server.Name, capabilities, tools));
             RegisterMcpServer(metric);
             return metric;
         }
@@ -878,17 +928,28 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 .FirstOrDefault(item => string.Equals(item.Name, server.Name, StringComparison.Ordinal));
             var metric = new DashboardMetrics.McpServerInfo(
                 server.Name,
-                server.Endpoint.ToString(),
+                EndpointRedaction.Redact(server.Endpoint),
                 previous?.Capabilities ?? [],
                 Connected: false,
                 LastConnectedAt: previous?.LastConnectedAt,
                 LastCheckedAt: now,
                 ex.Message,
-                previous?.Tools);
+                previous?.Tools,
+                Keywords: previous?.Keywords ??
+                    BuildMcpKeywords(server.Name, previous?.Capabilities ?? [], previous?.Tools));
             RegisterMcpServer(metric);
             return metric;
         }
     }
+
+    private static IReadOnlyList<string> BuildMcpKeywords(
+        string name,
+        IReadOnlyList<string> capabilities,
+        IReadOnlyList<DashboardMetrics.McpToolInfo>? tools) =>
+        ContentClassifier.ExtractKeywords(
+            $"{name} {string.Join(' ', capabilities)} " +
+            string.Join(' ', (tools ?? []).Select(static tool => $"{tool.Name} {tool.Description}")),
+            maxKeywords: 10);
 
     private void RegisterMcpServer(DashboardMetrics.McpServerInfo metric)
     {
@@ -1060,7 +1121,9 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                         snapshot.PageCount,
                         snapshot.Content.Length,
                         source.Enabled ? "ready" : "disabled",
-                        Error: null));
+                        Error: null,
+                        Topics: ContentClassifier.ExtractKeywords(snapshot.Content, maxKeywords: 12),
+                        Headings: snapshot.Headings ?? ContentClassifier.ExtractHeadings(snapshot.Content)));
                 }
             }
 
@@ -1086,9 +1149,14 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 _mcpServers[server.Name] = server;
                 var snapshot = state.McpCapabilities?
                     .FirstOrDefault(item => item.Name == server.Name);
+                var restoredTools = snapshot?.Tools?.Select(static tool => new DashboardMetrics.McpToolInfo(
+                        tool.Name,
+                        tool.Description,
+                        tool.InputSchema))
+                    .ToArray();
                 _collector.RegisterMcpServer(new DashboardMetrics.McpServerInfo(
                     server.Name,
-                    server.Endpoint.ToString(),
+                    EndpointRedaction.Redact(server.Endpoint),
                     snapshot?.Capabilities.ToArray() ?? [],
                     Connected: false,
                     LastConnectedAt: snapshot?.LastConnectedAt,
@@ -1096,11 +1164,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                     Error: snapshot is null
                         ? "Not probed yet."
                         : "Awaiting a fresh probe; showing last-known capabilities.",
-                    Tools: snapshot?.Tools?.Select(static tool => new DashboardMetrics.McpToolInfo(
-                            tool.Name,
-                            tool.Description,
-                            tool.InputSchema))
-                        .ToArray()));
+                    Tools: restoredTools,
+                    Keywords: BuildMcpKeywords(server.Name, snapshot?.Capabilities ?? [], restoredTools)));
             }
         }
 
@@ -1135,7 +1200,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                                 item.Key,
                                 item.Value,
                                 metric?.LastCrawledAt ?? DateTime.UtcNow,
-                                metric?.PageCount ?? 0);
+                                metric?.PageCount ?? 0,
+                                metric?.Headings);
                         }),
                     ],
                     [.. _remoteSkillContent.Values],
@@ -1189,6 +1255,10 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
     private DashboardMetrics.SkillInfo InspectSkill(SkillRegistration skill)
     {
+        var tags = ContentClassifier.ExtractKeywords(
+            $"{skill.Name} {skill.Description} {skill.Path}",
+            maxKeywords: 10);
+
         if (TryGetRemoteSkillUri(skill.Path, out _))
         {
             RemoteSkillSnapshot? content;
@@ -1204,7 +1274,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 skill.Enabled,
                 content?.SizeBytes ?? 0,
                 content?.FetchedAt ?? DateTime.MinValue,
-                !skill.Enabled ? "disabled" : content is null ? "pending" : "ready");
+                !skill.Enabled ? "disabled" : content is null ? "pending" : "ready",
+                Tags: tags);
         }
 
         var file = new FileInfo(skill.Path);
@@ -1219,7 +1290,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 ? "missing"
                 : file.Length > MaxSkillBytes
                     ? "too-large"
-                    : "ready");
+                    : "ready",
+            Tags: tags);
     }
 
     private async Task<DashboardMetrics.SkillInfo> RefreshRemoteSkillAsync(
@@ -1421,6 +1493,48 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         return WhitespaceRegex().Replace(WebUtility.HtmlDecode(withoutTags), " ").Trim();
     }
 
+    /// <summary>
+    /// Collects a bounded set of heading-like lines from one crawled page before its markup
+    /// is flattened to plain text, so a compact table of contents survives even though the
+    /// full page is not retained. HTML pages use their <c>&lt;h1&gt;</c>-<c>&lt;h6&gt;</c>
+    /// tags; other text pages fall back to Markdown-style <c>#</c> headings.
+    /// </summary>
+    private static void AppendPageHeadings(List<string> headings, string body, string mediaType)
+    {
+        if (headings.Count >= MaxHeadingsPerSource)
+        {
+            return;
+        }
+
+        if (mediaType.Equals("text/html", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (Match match in HeadingTagRegex().Matches(body))
+            {
+                var text = ToPlainText(match.Groups["text"].Value);
+                if (text.Length > 0 && text.Length <= MaxHeadingLength)
+                {
+                    headings.Add(text);
+                }
+
+                if (headings.Count >= MaxHeadingsPerSource)
+                {
+                    return;
+                }
+            }
+
+            return;
+        }
+
+        foreach (var heading in ContentClassifier.ExtractHeadings(body))
+        {
+            headings.Add(heading);
+            if (headings.Count >= MaxHeadingsPerSource)
+            {
+                return;
+            }
+        }
+    }
+
     private static bool MatchesPattern(string pattern, string value)
     {
         var expression = "^" + Regex.Escape(pattern).Replace("\\*", ".*", StringComparison.Ordinal) + "$";
@@ -1454,6 +1568,9 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
     [GeneratedRegex("""<[^>]+>""")]
     private static partial Regex TagRegex();
+
+    [GeneratedRegex("""(?is)<h[1-6][^>]*>(?<text>.*?)</h[1-6]>""")]
+    private static partial Regex HeadingTagRegex();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
@@ -1493,7 +1610,8 @@ public sealed record SourceContentSnapshot(
     string SourceId,
     string Content,
     DateTime FetchedAt,
-    int PageCount);
+    int PageCount,
+    IReadOnlyList<string>? Headings = null);
 
 /// <summary>Persisted bounded remote-skill content.</summary>
 public sealed record RemoteSkillSnapshot(

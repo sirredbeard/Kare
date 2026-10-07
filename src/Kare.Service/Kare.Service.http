@@ -7,7 +7,49 @@ GET {{baseUrl}}/health
 ### Dashboard snapshot, allowed LAN only
 GET {{baseUrl}}/dashboard/api/snapshot
 
-### Add an authoritative source
+### Intake: list current proposals
+GET {{baseUrl}}/dashboard/api/intake
+
+### Intake: paste a source (URL, repo, or direct SKILL.md-style link)
+POST {{baseUrl}}/dashboard/api/intake/source
+Content-Type: application/json
+
+{
+  "input": "https://learn.microsoft.com/dotnet/*"
+}
+
+### Intake: paste a skill (absolute path, HTTPS SKILL.md URL, or install command text)
+POST {{baseUrl}}/dashboard/api/intake/skill
+Content-Type: application/json
+
+{
+  "input": "/absolute/path/to/SKILL.md"
+}
+
+### Intake: paste an MCP endpoint
+POST {{baseUrl}}/dashboard/api/intake/mcp
+Content-Type: application/json
+
+{
+  "input": "https://mcp.example.com/mcp"
+}
+
+### Intake: approve a proposal held in review
+POST {{baseUrl}}/dashboard/api/intake/replace-with-proposal-id/approve
+
+### Intake: retry a failed proposal
+POST {{baseUrl}}/dashboard/api/intake/replace-with-proposal-id/retry
+
+### Intake: disable an active proposal and remove its registry record
+POST {{baseUrl}}/dashboard/api/intake/replace-with-proposal-id/disable
+
+### Intake: refresh an active proposal
+POST {{baseUrl}}/dashboard/api/intake/replace-with-proposal-id/refresh
+
+### Intake: delete a proposal
+DELETE {{baseUrl}}/dashboard/api/intake/replace-with-proposal-id
+
+### Add an authoritative source directly (older schema-based endpoint, still functional)
 POST {{baseUrl}}/dashboard/api/sources
 Content-Type: application/json
 
@@ -16,7 +58,7 @@ Content-Type: application/json
   "enabled": true
 }
 
-### Add an explicit local-file skill
+### Add an explicit local-file skill directly (older schema-based endpoint, still functional)
 POST {{baseUrl}}/dashboard/api/skills
 Content-Type: application/json
 
@@ -27,7 +69,7 @@ Content-Type: application/json
   "enabled": true
 }
 
-### Add an HTTPS skill
+### Add an HTTPS skill directly (older schema-based endpoint, still functional)
 POST {{baseUrl}}/dashboard/api/skills
 Content-Type: application/json
 
@@ -38,7 +80,7 @@ Content-Type: application/json
   "enabled": true
 }
 
-### Add and probe a Streamable HTTP MCP server
+### Add and probe a Streamable HTTP MCP server directly (older schema-based endpoint, still functional)
 POST {{baseUrl}}/dashboard/api/mcp-servers
 Content-Type: application/json
 

@@ -83,6 +83,29 @@ public sealed class ResponseCacheTests
     }
 
     [Fact]
+    public void CacheEntryDescriptorIsPrivacySafeAndClassifiesRequest()
+    {
+        var dashboard = new InMemoryMetricsCollector();
+        using var cache = CreateCache(dashboard);
+        var secretRequestText = "Please debug this go nil pointer panic in prod-secret-service-42";
+        var messages = new[] { new ChatMessage(ChatRole.User, secretRequestText) };
+        var options = new ChatOptions { ModelId = "kare-local", Temperature = 0 };
+
+        cache.Set(
+            messages,
+            options,
+            streaming: false,
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "cached")));
+
+        var entry = Assert.Single(dashboard.GetCacheEntries());
+        Assert.Contains("debug", entry.Keywords!);
+        Assert.Contains("go", entry.Keywords!);
+        Assert.Equal("debug", entry.TaskClass);
+        Assert.DoesNotContain(entry.Keywords!, keyword => keyword.Contains("secret", StringComparison.Ordinal));
+        Assert.DoesNotContain(entry.Keywords!, keyword => keyword.Contains("prod-secret-service", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ClearRemovesEveryTrackedResponse()
     {
         var dashboard = new InMemoryMetricsCollector();

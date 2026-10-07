@@ -167,8 +167,118 @@ public static class DashboardEndpoints
                     ? Results.NoContent()
                     : Results.NotFound());
 
+        builder.MapGet(
+            "/dashboard/api/intake",
+            static (IDashboardIntakeService intake) =>
+                Results.Json(
+                    (IReadOnlyList<IntakeProposal>)[.. intake.GetProposals().Select(Redacted)],
+                    DashboardJsonContext.Default.ListIntakeProposal));
+
+        builder.MapPost(
+            "/dashboard/api/intake/{kind}",
+            static async Task<IResult> (
+                string kind,
+                SubmitIntakeRequest request,
+                IDashboardIntakeService intake,
+                CancellationToken cancellationToken) =>
+            {
+                if (!TryParseKind(kind, out var intakeKind) ||
+                    string.IsNullOrWhiteSpace(request.Input))
+                {
+                    return Results.BadRequest();
+                }
+
+                try
+                {
+                    var proposal = await intake
+                        .SubmitAsync(intakeKind, request.Input, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Json(Redacted(proposal), DashboardJsonContext.Default.IntakeProposal);
+                }
+                catch (ArgumentException)
+                {
+                    return Results.BadRequest();
+                }
+                catch (InvalidOperationException)
+                {
+                    return Results.Conflict();
+                }
+            });
+
+        builder.MapPost(
+            "/dashboard/api/intake/{id}/approve",
+            static async Task<IResult> (string id, IDashboardIntakeService intake, CancellationToken cancellationToken) =>
+            {
+                var proposal = await intake.ApproveAsync(id, cancellationToken).ConfigureAwait(false);
+                return proposal is null ? Results.NotFound() : Results.Json(Redacted(proposal), DashboardJsonContext.Default.IntakeProposal);
+            });
+
+        builder.MapPost(
+            "/dashboard/api/intake/{id}/retry",
+            static async Task<IResult> (string id, IDashboardIntakeService intake, CancellationToken cancellationToken) =>
+            {
+                var proposal = await intake.RetryAsync(id, cancellationToken).ConfigureAwait(false);
+                return proposal is null ? Results.NotFound() : Results.Json(Redacted(proposal), DashboardJsonContext.Default.IntakeProposal);
+            });
+
+        builder.MapPost(
+            "/dashboard/api/intake/{id}/disable",
+            static async Task<IResult> (string id, IDashboardIntakeService intake, CancellationToken cancellationToken) =>
+            {
+                var proposal = await intake.DisableAsync(id, cancellationToken).ConfigureAwait(false);
+                return proposal is null ? Results.NotFound() : Results.Json(Redacted(proposal), DashboardJsonContext.Default.IntakeProposal);
+            });
+
+        builder.MapPost(
+            "/dashboard/api/intake/{id}/refresh",
+            static async Task<IResult> (string id, IDashboardIntakeService intake, CancellationToken cancellationToken) =>
+            {
+                var proposal = await intake.RefreshAsync(id, cancellationToken).ConfigureAwait(false);
+                return proposal is null ? Results.NotFound() : Results.Json(Redacted(proposal), DashboardJsonContext.Default.IntakeProposal);
+            });
+
+        builder.MapDelete(
+            "/dashboard/api/intake/{id}",
+            static async Task<IResult> (string id, IDashboardIntakeService intake, CancellationToken cancellationToken) =>
+                await intake.DeleteAsync(id, cancellationToken).ConfigureAwait(false)
+                    ? Results.NoContent()
+                    : Results.NotFound());
+
         return builder;
     }
+
+    private static bool TryParseKind(string value, out IntakeKind kind)
+    {
+        switch (value)
+        {
+            case "source":
+                kind = IntakeKind.Source;
+                return true;
+            case "skill":
+                kind = IntakeKind.Skill;
+                return true;
+            case "mcp":
+                kind = IntakeKind.Mcp;
+                return true;
+            default:
+                kind = default;
+                return false;
+        }
+    }
+
+    /// <summary>Redacts query strings and fragments from any endpoint-shaped field before the
+    /// proposal leaves the process boundary, in addition to the redaction already applied when
+    /// MCP endpoints are classified and persisted.</summary>
+    private static IntakeProposal Redacted(IntakeProposal proposal) =>
+        proposal with
+        {
+            RawInput = proposal.Kind == IntakeKind.Mcp
+                ? EndpointRedaction.RedactIfUri(proposal.RawInput)
+                : proposal.RawInput,
+            ResolvedTarget = proposal.Kind == IntakeKind.Mcp
+                ? EndpointRedaction.RedactIfUri(proposal.ResolvedTarget)
+                : proposal.ResolvedTarget,
+        };
 
     private const string Page = """
         <!doctype html>
@@ -244,6 +354,10 @@ public static class DashboardEndpoints
             .empty { padding: 24px 10px; color: var(--muted); text-align: center; }
             .delete { padding: 4px 7px; color: var(--red); }
             .danger { color: var(--red); }
+            .approve { color: var(--green); }
+            .preview { color: var(--muted); font-size: 12px; }
+            .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+            .actions button { padding: 3px 7px; font-size: 12px; }
             footer { padding: 18px 0 32px; color: var(--muted); }
             @media (max-width: 900px) {
               .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -317,43 +431,55 @@ public static class DashboardEndpoints
                   <button id="clear-cache" class="danger" type="button">Delete all</button>
                 </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Key</th><th>Created</th><th>Last used</th><th>Size</th><th></th></tr></thead>
+                  <thead><tr><th>Key</th><th>Created</th><th>Last used</th><th>Size</th><th>Keywords</th><th>Task</th><th></th></tr></thead>
                   <tbody id="cache"></tbody>
                 </table></div>
               </article>
               <article class="card full">
                 <h2>Authoritative sources</h2>
+                <p>Paste a URL, repository, or documentation page. Kare proposes a bounded fetch scope before anything is crawled.</p>
                 <div class="form-row">
-                  <input id="source-pattern" type="url" placeholder="https://docs.example.com/*">
-                  <button id="add-source" type="button">Add and crawl</button>
+                  <input id="source-paste" type="text" placeholder="https://docs.example.com/guide or https://github.com/owner/repo">
+                  <button id="add-source" type="button">Add</button>
                 </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Pattern</th><th>Status</th><th>Pages</th><th>Characters</th><th>Last crawled</th><th>Error</th><th></th></tr></thead>
+                  <thead><tr><th>Input</th><th>Status</th><th>Scope</th><th>Trust basis</th><th>Note</th><th></th></tr></thead>
+                  <tbody id="intake-source"></tbody>
+                </table></div>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>Pattern</th><th>Status</th><th>Pages</th><th>Characters</th><th>Topics</th><th>Last crawled</th><th>Error</th><th></th></tr></thead>
                   <tbody id="routes"></tbody>
                 </table></div>
               </article>
               <article class="card full">
                 <h2>Skills</h2>
+                <p>Paste a repository, direct SKILL.md URL, install/plugin command text, or an absolute device path. Commands are parsed, never executed.</p>
                 <div class="form-row">
-                  <input id="skill-name" type="text" placeholder="Skill name">
-                  <input id="skill-path" type="text" placeholder="/absolute/path/to/SKILL.md or https://example.com/SKILL.md">
-                  <input id="skill-description" type="text" placeholder="Description">
-                  <button id="add-skill" type="button">Add skill</button>
+                  <input id="skill-paste" type="text" placeholder="https://example.com/SKILL.md, a GitHub repo, or /absolute/path/to/SKILL.md">
+                  <button id="add-skill" type="button">Add</button>
                 </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Name</th><th>Description</th><th>File or URL</th><th>Status</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+                  <thead><tr><th>Input</th><th>Status</th><th>Scope</th><th>Trust basis</th><th>Note</th><th></th></tr></thead>
+                  <tbody id="intake-skill"></tbody>
+                </table></div>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>Name</th><th>Description</th><th>File or URL</th><th>Status</th><th>Tags</th><th>Size</th><th>Modified</th><th></th></tr></thead>
                   <tbody id="skills"></tbody>
                 </table></div>
               </article>
               <article class="card full">
                 <h2>MCP servers</h2>
+                <p>Paste an endpoint, package reference, repository, or install/plugin command. Query strings and fragments are redacted from this dashboard.</p>
                 <div class="form-row">
-                  <input id="mcp-name" type="text" placeholder="Server name">
-                  <input id="mcp-endpoint" type="url" placeholder="https://mcp.example.com/mcp">
-                  <button id="add-mcp" type="button">Add and probe</button>
+                  <input id="mcp-paste" type="text" placeholder="https://mcp.example.com/mcp or an install command">
+                  <button id="add-mcp" type="button">Add</button>
                 </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Name</th><th>Endpoint</th><th>Capabilities</th><th>Status</th><th>Last checked</th><th>Error</th><th></th></tr></thead>
+                  <thead><tr><th>Input</th><th>Status</th><th>Scope</th><th>Trust basis</th><th>Note</th><th></th></tr></thead>
+                  <tbody id="intake-mcp"></tbody>
+                </table></div>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>Name</th><th>Endpoint</th><th>Capabilities</th><th>Keywords</th><th>Status</th><th>Last checked</th><th>Error</th><th></th></tr></thead>
                   <tbody id="mcp"></tbody>
                 </table></div>
               </article>
@@ -487,33 +613,85 @@ public static class DashboardEndpoints
                 <tr><td title="${escapeHtml(item.key)}">${escapeHtml(item.key.slice(0, 12))}...</td>
                 <td>${escapeHtml(time(item.createdAt))}</td><td>${escapeHtml(time(item.lastAccessedAt))}</td>
                 <td>${escapeHtml(item.sizeBytes)} B</td>
-                <td><button class="delete" data-cache-key="${escapeHtml(item.key)}">Delete</button></td></tr>`).join('') : empty(5);
+                <td>${escapeHtml((item.keywords || []).join(', '))}</td>
+                <td>${escapeHtml(item.taskClass ?? '')}</td>
+                <td><button class="delete" data-cache-key="${escapeHtml(item.key)}">Delete</button></td></tr>`).join('') : empty(7);
 
               const routes = snapshot.routingDecisionUrls || [];
               document.querySelector('#routes').innerHTML = routes.length ? routes.map(item => `
                 <tr><td>${escapeHtml(item.pattern)}</td>
                 <td class="${item.status === 'ready' ? 'good' : item.status === 'failed' ? 'bad' : ''}">${escapeHtml(item.status)}</td>
                 <td>${escapeHtml(item.pageCount)}</td><td>${escapeHtml(item.contentCharacters)}</td>
+                <td title="${escapeHtml((item.headings || []).join(' / '))}">${escapeHtml((item.topics || []).join(', '))}</td>
                 <td>${escapeHtml(time(item.lastCrawledAt))}</td><td>${escapeHtml(item.error ?? '')}</td>
-                <td><button class="delete" data-source-id="${escapeHtml(item.id)}">Delete</button></td></tr>`).join('') : empty(7);
+                <td><button class="delete" data-source-id="${escapeHtml(item.id)}">Delete</button></td></tr>`).join('') : empty(8);
 
               const skills = snapshot.skills || [];
               document.querySelector('#skills').innerHTML = skills.length ? skills.map(item => `
                 <tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.description)}</td>
                 <td>${escapeHtml(item.path)}</td>
                 <td class="${item.status === 'ready' ? 'good' : 'bad'}">${escapeHtml(item.status)}</td>
+                <td>${escapeHtml((item.tags || []).join(', '))}</td>
                 <td>${escapeHtml(item.sizeBytes)} B</td><td>${escapeHtml(time(item.lastModifiedAt))}</td>
-                <td><button class="delete" data-skill-name="${escapeHtml(item.name)}">Delete</button></td></tr>`).join('') : empty(7);
+                <td><button class="delete" data-skill-name="${escapeHtml(item.name)}">Delete</button></td></tr>`).join('') : empty(8);
 
               const servers = snapshot.mcpServers || [];
               document.querySelector('#mcp').innerHTML = servers.length ? servers.map(item => `
                 <tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.endpoint)}</td>
                 <td>${escapeHtml((item.capabilities || []).join(', '))}</td>
+                <td>${escapeHtml((item.keywords || []).join(', '))}</td>
                 <td class="${item.connected ? 'good' : 'bad'}">${item.connected ? 'connected' : 'disconnected'}</td>
                 <td>${escapeHtml(time(item.lastCheckedAt))}</td><td>${escapeHtml(item.error ?? '')}</td>
-                <td><button class="delete" data-mcp-name="${escapeHtml(item.name)}">Delete</button></td></tr>`).join('') : empty(7);
+                <td><button class="delete" data-mcp-name="${escapeHtml(item.name)}">Delete</button></td></tr>`).join('') : empty(8);
 
               document.querySelector('#generated').textContent = `Updated ${time(snapshot.generatedAt)}. Refreshes every 5 seconds.`;
+            }
+
+            const intakeActions = proposal => {
+              const buttons = [];
+              if (proposal.requiresApproval && proposal.status === 'Review') {
+                buttons.push(`<button class="approve" data-intake-id="${escapeHtml(proposal.id)}" data-intake-action="approve">Approve</button>`);
+              }
+              if (proposal.status === 'Failed') {
+                buttons.push(`<button data-intake-id="${escapeHtml(proposal.id)}" data-intake-action="retry">Retry</button>`);
+              }
+              if (proposal.status === 'Active') {
+                buttons.push(`<button data-intake-id="${escapeHtml(proposal.id)}" data-intake-action="refresh">Refresh</button>`);
+                buttons.push(`<button data-intake-id="${escapeHtml(proposal.id)}" data-intake-action="disable">Disable</button>`);
+              }
+              buttons.push(`<button class="delete" data-intake-id="${escapeHtml(proposal.id)}" data-intake-action="delete">Delete</button>`);
+              return `<div class="actions">${buttons.join(' ')}</div>`;
+            };
+
+            const intakeStatusClass = status =>
+              status === 'Active' ? 'good' : status === 'Failed' ? 'bad' : status === 'Review' ? '' : 'muted';
+
+            function renderIntakeTable(elementId, proposals) {
+              const rows = proposals.length ? proposals.map(item => `
+                <tr><td title="${escapeHtml(item.rawInput)}">${escapeHtml((item.canonicalName || item.rawInput || '').slice(0, 60))}</td>
+                <td class="${intakeStatusClass(item.status)}">${escapeHtml(item.status)}</td>
+                <td>${escapeHtml(item.inferredScope ?? '')}</td>
+                <td>${escapeHtml(item.trustBasis ?? '')}</td>
+                <td title="${escapeHtml(item.error ?? '')}">${escapeHtml(item.resolvedDescription ?? item.error ?? '')}</td>
+                <td>${intakeActions(item)}</td></tr>`).join('') : empty(6);
+              document.querySelector(`#${elementId}`).innerHTML = rows;
+            }
+
+            function renderIntake(proposals) {
+              const byKind = kind => (proposals || []).filter(item => item.kind === kind);
+              renderIntakeTable('intake-source', byKind('Source'));
+              renderIntakeTable('intake-skill', byKind('Skill'));
+              renderIntakeTable('intake-mcp', byKind('Mcp'));
+            }
+
+            async function refreshIntake() {
+              try {
+                const response = await fetch('/dashboard/api/intake', { cache: 'no-store' });
+                if (!response.ok) return;
+                renderIntake(await response.json());
+              } catch {
+                // Intake polling failures do not interrupt the main dashboard refresh.
+              }
             }
 
             async function refresh() {
@@ -530,6 +708,7 @@ public static class DashboardEndpoints
                 dot.className = 'dot error';
                 connection.textContent = error.message;
               }
+              await refreshIntake();
             }
 
             document.querySelector('#refresh').addEventListener('click', refresh);
@@ -547,9 +726,9 @@ public static class DashboardEndpoints
               if (response.ok) refresh();
             });
             document.querySelector('#add-source').addEventListener('click', async () => {
-              const input = document.querySelector('#source-pattern');
-              const response = await postJson('/dashboard/api/sources', {
-                pattern: input.value.trim(), enabled: true
+              const input = document.querySelector('#source-paste');
+              const response = await postJson('/dashboard/api/intake/source', {
+                input: input.value.trim()
               });
               if (response.ok) {
                 input.value = '';
@@ -565,19 +744,12 @@ public static class DashboardEndpoints
               if (response.ok) refresh();
             });
             document.querySelector('#add-skill').addEventListener('click', async () => {
-              const name = document.querySelector('#skill-name');
-              const path = document.querySelector('#skill-path');
-              const description = document.querySelector('#skill-description');
-              const response = await postJson('/dashboard/api/skills', {
-                name: name.value.trim(),
-                path: path.value.trim(),
-                description: description.value.trim(),
-                enabled: true
+              const input = document.querySelector('#skill-paste');
+              const response = await postJson('/dashboard/api/intake/skill', {
+                input: input.value.trim()
               });
               if (response.ok) {
-                name.value = '';
-                path.value = '';
-                description.value = '';
+                input.value = '';
                 refresh();
               }
             });
@@ -590,14 +762,12 @@ public static class DashboardEndpoints
               if (response.ok) refresh();
             });
             document.querySelector('#add-mcp').addEventListener('click', async () => {
-              const name = document.querySelector('#mcp-name');
-              const endpoint = document.querySelector('#mcp-endpoint');
-              const response = await postJson('/dashboard/api/mcp-servers', {
-                name: name.value.trim(), endpoint: endpoint.value.trim()
+              const input = document.querySelector('#mcp-paste');
+              const response = await postJson('/dashboard/api/intake/mcp', {
+                input: input.value.trim()
               });
               if (response.ok) {
-                name.value = '';
-                endpoint.value = '';
+                input.value = '';
                 refresh();
               }
             });
@@ -609,6 +779,18 @@ public static class DashboardEndpoints
               });
               if (response.ok) refresh();
             });
+            async function handleIntakeAction(event) {
+              const id = event.target.dataset.intakeId;
+              const action = event.target.dataset.intakeAction;
+              if (!id || !action) return;
+              const response = action === 'delete'
+                ? await fetch(`/dashboard/api/intake/${encodeURIComponent(id)}`, { method: 'DELETE' })
+                : await fetch(`/dashboard/api/intake/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+              if (response.ok) refresh();
+            }
+            document.querySelector('#intake-source').addEventListener('click', handleIntakeAction);
+            document.querySelector('#intake-skill').addEventListener('click', handleIntakeAction);
+            document.querySelector('#intake-mcp').addEventListener('click', handleIntakeAction);
 
             function postJson(url, value) {
               return fetch(url, {

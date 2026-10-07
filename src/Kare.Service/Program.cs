@@ -125,6 +125,11 @@ builder.Services.AddSingleton<IDashboardKnowledgeService>(
     sp => sp.GetRequiredService<DashboardKnowledgeService>());
 builder.Services.AddSingleton<IHostedService>(
     sp => sp.GetRequiredService<DashboardKnowledgeService>());
+
+// The intake resolver depends only on the knowledge registry and the raw selected-backend
+// chat client, never on ContextEnrichingChatClient or the fully routed IChatClient, so there
+// is no DI cycle between dashboard context injection and dashboard intake.
+builder.Services.AddSingleton<IDashboardIntakeService, DashboardIntakeService>();
 builder.Services.AddHttpClient(nameof(DashboardKnowledgeService), client =>
 {
     client.Timeout = TimeSpan.FromSeconds(15);
