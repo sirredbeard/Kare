@@ -208,7 +208,7 @@ filename: /lib/modules/6.8.0-1084-qcom/kernel/drivers/nvme/host/nvme.ko.zst
 description: NVMe host PCIe transport driver
 ```
 
-## Measured 2026-10-02, what we would gain
+## Measured 2026-10-02, what we expected to gain
 
 Current storage is eMMC, `/dev/mmcblk0`, 59.3 GB with about 34 GB free, ext4 on `/dev/mmcblk0p71`. Sequential read measured with caches dropped:
 
@@ -231,6 +231,60 @@ Embeddings and vector search. If we add pgvector or any local index, random read
 
 What it will not fix. Inference is CPU and NPU bound. Prefill is currently about 15 ms per prompt token on CPU and storage has nothing to do with that. Do not expect the NVMe to make generation faster.
 
-## Plan
+## Measured 2026-10-06, the OSCOO drive is installed
 
-Buy a named 2230 M key NVMe drive, not the 2280 and not a seller-variable OEM listing unless the exact part and condition are confirmed. Prefer 512 GB or 1 TB. Mount it at `/var/lib/kare` and put models, the cache database, logs, and any index there. Keep the root filesystem on eMMC and keep writes off it.
+The board now sees the installed drive:
+
+```
+/dev/nvme0n1 476.9G OSCOO PCIe 512GB
+controller                 MAXIO MAP1602, DRAM-less
+firmware                   SN025696
+logical block size         512 bytes
+physical block size        512 bytes
+partition table            none
+filesystem                 none
+mount                      none
+kernel driver              nvme
+```
+
+The PCIe root port can run at Gen4 x4, but the active link is downgraded:
+
+```
+LnkCap:  Speed 16GT/s, Width x4
+LnkSta:  Speed 16GT/s, Width x1 (downgraded)
+```
+
+The first read-only test transferred 1 GiB with direct I/O at 1.6 GB/s. That is about 5.4 times the earlier 294 MB/s eMMC read, however it is not a full Gen4 x4 result. The x1 negotiation needs a separate hardware and firmware investigation before we claim the slot is operating normally.
+
+`nvme-cli` is not installed on the board yet. The first health pass used sysfs, `lsblk`, `lspci`, and a privileged direct read. No write test has been run, and the drive has not been formatted.
+
+## NVMe rollout plan
+
+Do not format the drive until the PCIe link and device health have been recorded. The order matters:
+
+1. Install `nvme-cli` outside the repository and record controller identity, namespace size, SMART counters, temperature, power states, percentage used, media errors, and data units written.
+2. Check the board firmware, device tree, PCIe root-port configuration, kernel messages, and physical seating. Reseat the module if the board documentation allows it. Repeat the link check after each change.
+3. Run a destructive full-capacity write and verification only after the drive identity and return path are recorded. This is a new drive, and fake capacity is unlikely, however storage gets tested before Kare trusts it.
+4. Create one GPT partition and an ext4 filesystem. Mount it at `/var/lib/kare` with an explicit systemd mount or `fstab` entry, `noatime`, and a scheduled `fstrim`. Do not put the OS or boot files there.
+5. Keep the service binary and project checkout on eMMC for now. Put model files, compiled accelerator artifacts, logs, benchmark results, backups, and future indexes under the NVMe data root through explicit configuration paths.
+6. Move the future PostgreSQL data directory to NVMe only after measuring fsync latency, random writes, temperature, and sustained behavior. PostgreSQL is the planned persistence layer, but it is not a reason to skip the storage gate.
+7. Keep the current response cache in memory until the persistent cache has repository fingerprints, privacy classification, expiry, invalidation, and deletion. NVMe makes persistence practical, it does not make an unsafe cache safe.
+8. Add a small storage health surface to the operations dashboard: mount state, free space, model residency, cache size, database size, temperature, percentage used, and the last successful health sample. Do not display serial numbers or protected configuration.
+9. Benchmark cold model load, warm model load, cache writes, context retrieval, PostgreSQL reads and writes, log rotation, and backup creation on eMMC and NVMe. Record first-token latency separately so storage improvements are not confused with inference improvements.
+
+The first useful layout is:
+
+```
+/var/lib/kare/
+  models/
+  runtimes/
+  cache/
+  postgres/
+  logs/
+  benchmarks/
+  backups/
+```
+
+Use separate retention limits for `cache`, `logs`, `benchmarks`, and `backups`. Keep model directories checksummed and versioned. Do not store prompts, source code, credentials, or copied Copilot settings in a general-purpose storage directory just because it is large.
+
+The drive is a storage and startup improvement, not an inference accelerator. GenieX still owns token latency. NVMe should reduce cold model load time, move write-heavy state away from the boot eMMC, and give context, cache, index, and backup work room to grow.

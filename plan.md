@@ -500,6 +500,24 @@ PostgreSQL is the better fit than SQLite or a document database here:
 
 Do not use the database as a token cache or a dumping ground for complete repositories. Keep model files, compiled graphs, large immutable blobs, and disposable tokenized prefixes on NVMe. Store metadata, hashes, provenance, compacted context, embeddings, route accounting, validation results, and bounded cache records in PostgreSQL.
 
+### NVMe storage plan
+
+The VENTUNO Q now has a 476.9 GiB OSCOO PCIe 512GB NVMe drive at `/dev/nvme0n1`. It is unpartitioned and unmounted. The controller is a DRAM-less MAXIO MAP1602. The PCIe root port advertises Gen4 x4, but the active link is Gen4 x1. A privileged direct read reached 1.6 GB/s, compared with the earlier 294 MB/s eMMC read. Investigate the downgraded link before treating the storage path as complete.
+
+Keep the operating system, boot files, service checkout, and rollback release on eMMC. Use an ext4 filesystem mounted at `/var/lib/kare` for models, compiled accelerator artifacts, logs, PostgreSQL, cache data, indexes, benchmark results, and encrypted backups. Use explicit configuration paths instead of making the service guess whether a symlink or drive is present.
+
+Roll out storage in stages:
+
+1. Record `nvme-cli` identity and SMART data, then check firmware, device tree, kernel messages, and physical seating for the x1 link.
+2. Verify full capacity and sustained read, write, random I/O, fsync, temperature, and throttling behavior before trusting the drive.
+3. Mount the drive with bounded retention and scheduled trim. Keep the service binary on eMMC until the data paths are proven.
+4. Move model files and compiled runtime artifacts first. Measure cold loads and model swaps.
+5. Move logs, benchmark results, and encrypted backups next. Keep each retention policy separate.
+6. Move PostgreSQL and future persistent cache data only after fsync and recovery tests pass.
+7. Add storage health and capacity metadata to the dashboard without exposing serial numbers, prompts, source code, or credentials.
+
+NVMe should improve model startup, model switching, cache and database writes, retrieval, indexing, and backups. It will not change GenieX token latency after the model is resident in memory. Measure first-token latency separately from storage latency.
+
 Use separate records for:
 
 - Session and turn identity

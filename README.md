@@ -49,7 +49,7 @@ I am running Kare on an [Arduino VENTUNO Q](https://www.arduino.cc/product-ventu
 - Qualcomm Hexagon V75 NPU and Adreno 623 GPU.
 - 16 GB LPDDR5 memory.
 - 64 GB eMMC.
-- An M.2 NVMe slot for models, indexes, logs, and cache data.
+- A 512 GB OSCOO PCIe NVMe drive in the M.2 slot for models, indexes, logs, and cache data. It currently negotiates a PCIe Gen4 x1 link and is not mounted yet.
 
 The service is .NET 11. GitHub Copilot CLI runs on the workstation, `copilot-kare` opens a protected SSH tunnel to the board, and Kare listens on loopback.
 
