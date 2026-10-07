@@ -105,6 +105,11 @@ cd Kare
 ./build/device-publish.sh --test
 ```
 
+The device publish path now fails before deployment when `kare-geniex.service`
+is not using the expected NPU compute target or cannot complete a bounded
+inference. Set `KARE_GENIEX_EXPECTED_COMPUTE` only when intentionally validating
+another compute target.
+
 The script creates a commit-specific release, switches the `current` symlink, restarts the user service, and waits for `/health`.
 
 ## Build `copilot-kare`

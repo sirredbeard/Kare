@@ -44,6 +44,8 @@ if [[ ! -x "$DOTNET" ]]; then
     exit 1
 fi
 
+"$REPO_ROOT/build/device-geniex-guard.sh"
+
 if [[ "$OUTPUT" != "$REPO_ROOT/artifacts/"* ||
       "$RELEASE" != "$DEPLOY_ROOT/releases/"* ||
       "$CURRENT" != "$DEPLOY_ROOT/current" ]]; then
@@ -101,4 +103,5 @@ curl --fail --silent \
     --retry-connrefused \
     --max-time 2 \
     http://127.0.0.1:5285/health
+"$REPO_ROOT/build/device-geniex-guard.sh"
 printf '\nDeployed %s from %s\n' "$MODE" "$COMMIT"

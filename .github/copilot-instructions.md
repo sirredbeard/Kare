@@ -122,6 +122,8 @@ Publish and test the device service with:
 
 `build/device-publish.sh` must run on the ARM64 device. It publishes into a commit-specific release directory, updates the `current` symlink atomically, restarts `kare.service`, and waits for the loopback health endpoint.
 
+The publish script runs `build/device-geniex-guard.sh` before and after deployment. The guard fails when `kare-geniex.service` is not using the expected `npu` compute target or when a bounded inference fails. Use `KARE_GENIEX_EXPECTED_COMPUTE` only for an intentional measured comparison.
+
 Keep the checked-out device branch synchronized with Git. Do not copy source trees or credentials through ad hoc deployment commands. `build/deploy.sh` is only for copying an already-published artifact when Git-based device iteration is not available.
 
 Use this workflow for normal device changes:

@@ -183,6 +183,44 @@ public sealed class HydraFusionCascadeChatClientTests
     }
 
     [Fact]
+    public async Task ToolContinuationReusesInitialRouteDecision()
+    {
+        var local = new ScriptedChatClient((_, options) =>
+        {
+            Assert.Equal(8, options?.MaxOutputTokens);
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "fast"));
+        });
+        var cloud = new ScriptedCloudBackend();
+        using var cache = CreateCache();
+        using var client = CreateClient(local, cloud, cache);
+        var options = new ChatOptions
+        {
+            Tools = [AIFunctionFactory.Create(() => "ok", "web_search")],
+        };
+        var user = new ChatMessage(ChatRole.User, "What is the weather in Seattle?");
+
+        await client.GetResponseAsync(
+            [user],
+            options,
+            TestContext.Current.CancellationToken);
+        await client.GetResponseAsync(
+            [
+                user,
+                new ChatMessage(
+                    ChatRole.Assistant,
+                    [new FunctionCallContent("call-1", "web_search", null)]),
+                new ChatMessage(
+                    ChatRole.Tool,
+                    [new FunctionResultContent("call-1", "partly cloudy")]),
+            ],
+            options,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, local.CallCount);
+        Assert.Equal(["fast", "fast"], cloud.ModelsCalled);
+    }
+
+    [Fact]
     public async Task ToolRequestUsesOnlyToolCapableCloudTargets()
     {
         var local = new ScriptedChatClient((messages, options) =>
@@ -326,6 +364,7 @@ public sealed class HydraFusionCascadeChatClientTests
                 EnableCascadeEscalation = true,
                 CascadeDecisionMaxInputCharacters = 2_000,
                 CascadeDecisionMaxOutputTokens = 64,
+                CascadeToolDecisionMaxOutputTokens = 8,
                 EnableCascadeResultJudge = enableResultJudge,
                 EnableCascadeCritique = enableCritique,
             }),

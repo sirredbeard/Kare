@@ -267,7 +267,9 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         {
             ModelId = _localModelId,
             Temperature = 0,
-            MaxOutputTokens = _options.CascadeDecisionMaxOutputTokens,
+            MaxOutputTokens = requiresTools
+                ? _options.CascadeToolDecisionMaxOutputTokens
+                : _options.CascadeDecisionMaxOutputTokens,
             ToolMode = ChatToolMode.None,
             AdditionalProperties = new()
             {
@@ -303,11 +305,11 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 target,
                 response,
                 decision,
-                response.FinishReason == ChatFinishReason.Length
+                target is not null
+                    ? $"Local Qwen selected cascade target {target}."
+                    : response.FinishReason == ChatFinishReason.Length
                     ? "Local Qwen's cascade answer was truncated; using the first configured cloud model."
-                    : target is null
-                    ? "Local Qwen requested escalation without a valid target; using the first configured cloud model."
-                    : $"Local Qwen selected cascade target {target}.");
+                    : "Local Qwen requested escalation without a valid target; using the first configured cloud model.");
         }
         catch (Exception ex) when (
             ex is PromptTooLargeException or LocalInferenceException or
@@ -738,26 +740,36 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             messages.Count,
             toolCount,
             request.Length);
-        var instructions = $"""
-            You are Kare's local Qwen cascade gate. Dashboard authoritative sources and enabled skills
-            are supplied in a separate system message. Connected MCP server names and capabilities are
-            advisory; do not claim to have called them.
+        var instructions = toolCount > 0
+            ? $"""
+                You are Kare's local Qwen cascade gate. This request requires caller-owned tools,
+                so it cannot be answered locally. Return only one target ID from the ordered list.
+                Do not explain, reason, answer the request, or add a prefix. Choose the earliest
+                sufficient target. Current or live information should use the earliest target that
+                can call the supplied tools.
 
-            Return exactly one of these forms:
-            KARE_ANSWER:
-            <answer>
+                Tool names: {toolNames}.
+                Ordered cloud targets:
+                {candidateList}
+                """
+            : $"""
+                You are Kare's local Qwen cascade gate. Dashboard authoritative sources and enabled skills
+                are supplied in a separate system message. Connected MCP server names and capabilities are
+                advisory; do not claim to have called them.
 
-            KARE_ESCALATE:<target-id>
+                Return exactly one of these forms:
+                KARE_ANSWER:
+                <answer>
 
-            Answer locally only when the supplied authoritative context directly supports the answer,
-            or the request is simple and reliable without repository access or tools. Escalate coding,
-            repository, tool, uncertain, or long-context work. Choose the earliest sufficient target.
+                KARE_ESCALATE:<target-id>
 
-            Request metadata: characters={totalCharacters}; messages={messages.Count}; tools={toolCount};
-            tool names={toolNames}.
-            Ordered cloud targets:
-            {candidateList}
-            """;
+                Answer locally only when the supplied authoritative context directly supports the answer,
+                or the request is simple and reliable without repository access or tools. Escalate coding,
+                repository, uncertain, or long-context work. Choose the earliest sufficient target.
+
+                Ordered cloud targets:
+                {candidateList}
+                """;
 
         return
         [
@@ -806,7 +818,12 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
     {
         if (!text.StartsWith(EscalateMarker, StringComparison.Ordinal))
         {
-            return null;
+            var directTarget = text
+                .Split(['\r', '\n', ' ', '\t', ':'], StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault();
+            return candidates.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, directTarget, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(candidate.ModelId, directTarget, StringComparison.OrdinalIgnoreCase))?.Id;
         }
 
         var requested = text[EscalateMarker.Length..]

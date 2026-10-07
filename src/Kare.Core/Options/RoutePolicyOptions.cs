@@ -49,6 +49,13 @@ public sealed class RoutePolicyOptions
     public int CascadeDecisionMaxOutputTokens { get; set; } = 32;
 
     /// <summary>
+    /// Maximum tokens generated when caller tools require a cloud target and the gate only
+    /// needs to return a target identifier.
+    /// </summary>
+    [Range(4, 64)]
+    public int CascadeToolDecisionMaxOutputTokens { get; set; } = 8;
+
+    /// <summary>
     /// Runs a bounded local result judge after a non-streaming cloud draft. Disabled by default
     /// until task-class quality measurements justify the extra local call.
     /// </summary>
