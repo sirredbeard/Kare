@@ -178,7 +178,7 @@ The launcher prints the log directory. Use `--kare-log-dir PATH` when you need a
 
 ## Operations dashboard
 
-Kare includes a local dashboard at `/dashboard`. Open `http://127.0.0.1:5285/dashboard` on the Arduino itself, or forward port `5285` through the same SSH connection used by `copilot-kare` and open the forwarded local address in a browser.
+Kare includes a local web dashboard on port `5285` at `/dashboard`. Open `http://127.0.0.1:5285/dashboard` on the Arduino itself, or forward port `5285` through the same SSH connection used by `copilot-kare` and open the forwarded local address in a browser.
 
 The dashboard stores operational metadata, not prompts, source code, generated responses, tokens, or protected config. The access rules and feature list are in [Copilot instructions](.github/copilot-instructions.md#operations-dashboard).
 
