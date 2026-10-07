@@ -1,8 +1,11 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using Kare.Abstractions;
 using Kare.Core;
+using Kare.Core.Options;
 using Kare.Service.Cache;
+using Kare.Service.Dashboard;
 using Kare.Service.Options;
 using Kare.Service.Routing;
 using Microsoft.AspNetCore.Builder;
@@ -57,6 +60,8 @@ public static class ChatCompletionsEndpoints
         ResponseCache responseCache,
         CascadeRouteContext routeContext,
         IRouteRecorder routeRecorder,
+        IDashboardKnowledgeService knowledge,
+        IOptions<RoutePolicyOptions> routePolicyOptions,
         IOptions<KareServiceOptions> serviceOptions,
         ILoggerFactory loggerFactory)
     {
@@ -92,7 +97,9 @@ public static class ChatCompletionsEndpoints
             messages = OpenAiTranslator.ToChatMessages(request.Messages);
             responseModelId = modelId;
             chatOptions = OpenAiTranslator.ToChatOptions(request, modelId);
+            AddCacheFingerprints(chatOptions, knowledge, routePolicyOptions.Value);
         }
+
         catch (InvalidRequestException ex)
         {
             await WriteErrorAsync(context, StatusCodes.Status400BadRequest, ex.Message, ex.Code).ConfigureAwait(false);
@@ -201,6 +208,38 @@ public static class ChatCompletionsEndpoints
                 "Client cancelled the request on route {Route}.",
                 routeContext.Current?.Route ?? KareRoute.None);
         }
+    }
+
+    private static void AddCacheFingerprints(
+        ChatOptions options,
+        IDashboardKnowledgeService knowledge,
+        RoutePolicyOptions routePolicy)
+    {
+        options.AdditionalProperties ??= new();
+        options.AdditionalProperties[ResponseCache.ContextFingerprintOptionName] =
+            knowledge.ContextVersion;
+        options.AdditionalProperties[ResponseCache.RoutePolicyVersionOptionName] =
+            ComputeRoutePolicyFingerprint(routePolicy);
+    }
+
+    private static string ComputeRoutePolicyFingerprint(RoutePolicyOptions options)
+    {
+        var value = string.Join(
+            "\n",
+            options.LocalModelId,
+            options.LightModelId,
+            options.CloudModelId,
+            options.ComplexModelId,
+            options.AutomaticModelId,
+            options.EnableAutomaticCloudEscalation,
+            options.EnableCascadeEscalation,
+            options.CascadeDecisionMaxInputCharacters,
+            options.CascadeDecisionMaxOutputTokens,
+            options.EnableCascadeResultJudge,
+            options.CascadeJudgeMaxOutputTokens,
+            options.ModeratePromptCharacterThreshold,
+            options.ComplexPromptCharacterThreshold);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     }
 
     private static async Task<ChatResponse> CompleteAsync(
