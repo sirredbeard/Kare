@@ -37,6 +37,7 @@ internal sealed class RotatingFileLoggerProvider : ILoggerProvider
 
         Directory.CreateDirectory(_directory);
         SetPrivateDirectoryMode(_directory);
+        PrepareExistingFiles();
         (_writer, _currentLength) = OpenCurrentFile();
     }
 
@@ -65,6 +66,7 @@ internal sealed class RotatingFileLoggerProvider : ILoggerProvider
             line = $"{line}{Environment.NewLine}{exception}";
         }
 
+        line = BoundEntry(line);
         var bytes = Encoding.UTF8.GetByteCount(line) + Encoding.UTF8.GetByteCount(Environment.NewLine);
 
         lock (_lock)
@@ -80,6 +82,38 @@ internal sealed class RotatingFileLoggerProvider : ILoggerProvider
         }
     }
 
+    private string BoundEntry(string line)
+    {
+        var maxEntryBytes = checked((int)Math.Min(
+            int.MaxValue,
+            _fileSizeLimitBytes - Encoding.UTF8.GetByteCount(Environment.NewLine)));
+        if (maxEntryBytes <= 0 || Encoding.UTF8.GetByteCount(line) <= maxEntryBytes)
+        {
+            return maxEntryBytes <= 0 ? string.Empty : line;
+        }
+
+        var buffer = new byte[maxEntryBytes];
+        Encoding.UTF8.GetEncoder().Convert(
+            line.AsSpan(),
+            buffer.AsSpan(),
+            flush: true,
+            out _,
+            out var bytesUsed,
+            out _);
+        return Encoding.UTF8.GetString(buffer.AsSpan(0, bytesUsed));
+    }
+
+    private void PrepareExistingFiles()
+    {
+        var currentPath = GetCurrentPath();
+        if (File.Exists(currentPath) && new FileInfo(currentPath).Length > _fileSizeLimitBytes)
+        {
+            ArchiveCurrentFile(currentPath);
+        }
+
+        DeleteOldestArchives();
+    }
+
     private void Rotate()
     {
         _writer.Dispose();
@@ -87,15 +121,20 @@ internal sealed class RotatingFileLoggerProvider : ILoggerProvider
         var currentPath = GetCurrentPath();
         if (File.Exists(currentPath))
         {
-            var archivePath = Path.Combine(
-                _directory,
-                $"kare-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmssfff}-{++_archiveSequence:D6}.log");
-            File.Move(currentPath, archivePath);
-            SetPrivateFileMode(archivePath);
+            ArchiveCurrentFile(currentPath);
         }
 
         DeleteOldestArchives();
         (_writer, _currentLength) = OpenCurrentFile();
+    }
+
+    private void ArchiveCurrentFile(string currentPath)
+    {
+        var archivePath = Path.Combine(
+            _directory,
+            $"kare-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmssfff}-{++_archiveSequence:D6}.log");
+        File.Move(currentPath, archivePath);
+        SetPrivateFileMode(archivePath);
     }
 
     private void DeleteOldestArchives()

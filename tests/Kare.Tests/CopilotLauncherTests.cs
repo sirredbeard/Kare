@@ -49,6 +49,28 @@ public sealed class CopilotLauncherTests
         Assert.Equal("--kare-log-dir requires a path.", result.Error);
     }
 
+    [Theory]
+    [InlineData("--help")]
+    [InlineData("--kare-verbose")]
+    public void ParsePreservesCopilotOptionValues(string value)
+    {
+        var result = LauncherInputParser.Parse(["-p", value]);
+
+        Assert.False(result.ShowHelp);
+        Assert.False(result.Verbose);
+        Assert.Equal(["-p", value], result.CopilotArguments);
+    }
+
+    [Fact]
+    public void ParseHonorsPassThroughBoundary()
+    {
+        var result = LauncherInputParser.Parse(["--kare-verbose", "--", "--help"]);
+
+        Assert.True(result.Verbose);
+        Assert.False(result.ShowHelp);
+        Assert.Equal(["--help"], result.CopilotArguments);
+    }
+
     [Fact]
     public void ResolvePrefersExplicitDeviceHostOverEnvironmentAndConfig()
     {

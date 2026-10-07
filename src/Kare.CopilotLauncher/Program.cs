@@ -380,7 +380,15 @@ internal sealed class CopilotKareApp
 
         if (input.Verbose)
         {
+            var forwardedLogDirectory = GetOptionValue(input.CopilotArguments, "--log-dir");
+            if (input.LogDirectory is not null && forwardedLogDirectory is not null)
+            {
+                throw new InvalidOperationException(
+                    "Use either --kare-log-dir or Copilot's --log-dir option, not both.");
+            }
+
             var logDirectory = input.LogDirectory ??
+                forwardedLogDirectory ??
                 Path.Combine(
                     configDirectory,
                     CopilotLogDirectoryName,
@@ -431,6 +439,26 @@ internal sealed class CopilotKareApp
         return arguments.Any(argument =>
             string.Equals(argument, option, StringComparison.Ordinal) ||
             argument.StartsWith($"{option}=", StringComparison.Ordinal));
+    }
+
+    private static string? GetOptionValue(IReadOnlyList<string> arguments, string option)
+    {
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (argument.StartsWith($"{option}=", StringComparison.Ordinal))
+            {
+                return argument[(option.Length + 1)..];
+            }
+
+            if (string.Equals(argument, option, StringComparison.Ordinal) &&
+                index + 1 < arguments.Count)
+            {
+                return arguments[index + 1];
+            }
+        }
+
+        return null;
     }
 
     private static void StopProcess(Process process, string processName)
@@ -488,28 +516,36 @@ internal static class LauncherInputParser
         string? logDirectory = null;
         var verbose = false;
         var minimalContext = false;
+        var parseLauncherOptions = true;
 
         for (var index = 0; index < args.Length; index++)
         {
             var argument = args[index];
-            if (IsHelpArgument(argument))
+            if (parseLauncherOptions && argument is "--")
+            {
+                parseLauncherOptions = false;
+                continue;
+            }
+
+            if (parseLauncherOptions && IsHelpArgument(argument))
             {
                 return new LauncherInput(null, [], true, false, null, false, null);
             }
 
-            if (argument is "--kare-verbose")
+            if (parseLauncherOptions && argument is "--kare-verbose")
             {
                 verbose = true;
                 continue;
             }
 
-            if (argument is "--kare-minimal-context")
+            if (parseLauncherOptions && argument is "--kare-minimal-context")
             {
                 minimalContext = true;
                 continue;
             }
 
-            if (argument.StartsWith("--kare-log-dir=", StringComparison.Ordinal))
+            if (parseLauncherOptions &&
+                argument.StartsWith("--kare-log-dir=", StringComparison.Ordinal))
             {
                 logDirectory = argument["--kare-log-dir=".Length..];
                 verbose = true;
@@ -521,7 +557,7 @@ internal static class LauncherInputParser
                 continue;
             }
 
-            if (argument is "--kare-log-dir")
+            if (parseLauncherOptions && argument is "--kare-log-dir")
             {
                 if (++index >= args.Length || string.IsNullOrWhiteSpace(args[index]))
                 {
@@ -533,7 +569,8 @@ internal static class LauncherInputParser
                 continue;
             }
 
-            if (deviceHost is null &&
+            if (parseLauncherOptions &&
+                deviceHost is null &&
                 copilotArguments.Count == 0 &&
                 !argument.StartsWith('-', StringComparison.Ordinal))
             {
@@ -541,6 +578,7 @@ internal static class LauncherInputParser
                 continue;
             }
 
+            parseLauncherOptions = false;
             copilotArguments.Add(argument);
         }
 

@@ -241,7 +241,8 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 .GetResponseAsync(decisionMessages, gateOptions, cancellationToken)
                 .ConfigureAwait(false);
             var text = GetText(response).Trim();
-            if (text.StartsWith(AnswerMarker, StringComparison.Ordinal))
+            if (response.FinishReason != ChatFinishReason.Length &&
+                text.StartsWith(AnswerMarker, StringComparison.Ordinal))
             {
                 var answer = text[AnswerMarker.Length..].Trim();
                 if (answer.Length > 0)
@@ -261,7 +262,9 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 target,
                 response,
                 decision,
-                target is null
+                response.FinishReason == ChatFinishReason.Length
+                    ? "Local Qwen's cascade answer was truncated; using the first configured cloud model."
+                    : target is null
                     ? "Local Qwen requested escalation without a valid target; using the first configured cloud model."
                     : $"Local Qwen selected cascade target {target}.");
         }
