@@ -70,7 +70,7 @@ The launcher should:
 - export the required BYOK env vars for Copilot CLI
 - start Copilot with an isolated `COPILOT_HOME`
 
-The default launcher profile matches the measured 24576-token GenieX runtime. It advertises 23552 prompt tokens and reserves 1024 output tokens. Copilot CLI 1.0.92 then loads all 26 tools, repository instructions, and the builtin GitHub MCP server without rejecting the turn before Kare receives it.
+The default launcher profile advertises 31744 prompt tokens and reserves 1024 output tokens. This is a routed 32768-token Copilot context, not a claim that the local GenieX sidecar receives the full wrapper. The local gate remains bounded to selected request text and authoritative context.
 
 The local cascade gate uses at most the final 1024 request characters and 32 output tokens. Keep this routing request small. The full Copilot wrapper took more than two minutes when the gate admitted 6000 characters.
 
@@ -123,6 +123,8 @@ Publish and test the device service with:
 `build/device-publish.sh` must run on the ARM64 device. It publishes into a commit-specific release directory, updates the `current` symlink atomically, restarts `kare.service`, and waits for the loopback health endpoint.
 
 The publish script runs `build/device-geniex-guard.sh` before and after deployment. The guard fails when `kare-geniex.service` is not using the expected `npu` compute target or when a bounded inference fails. Use `KARE_GENIEX_EXPECTED_COMPUTE` only for an intentional measured comparison.
+
+Kare's runtime health monitor probes the preferred accelerator every five minutes and immediately after a local inference failure. It may gracefully stop and start `kare-geniex.service` once per hour, with a cleanup delay between operations. It must not reboot the device. Return to NPU only after consecutive successful probes. Use a configured and already validated ONNX CPU backend when one exists. Otherwise warn in Copilot chat that no CPU fallback is configured and let the existing route policy decide whether a cloud route is available.
 
 Keep the checked-out device branch synchronized with Git. Do not copy source trees or credentials through ad hoc deployment commands. `build/deploy.sh` is only for copying an already-published artifact when Git-based device iteration is not available.
 

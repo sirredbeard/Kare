@@ -78,7 +78,13 @@ public sealed class GenieXBackend : ILocalInferenceBackend
                 new GenieXReadinessRequest
                 {
                     Model = _options.ModelId,
-                    Messages = [new GenieXReadinessMessage()],
+                    Messages =
+                    [
+                        new GenieXReadinessMessage
+                        {
+                            Content = $"Reply OK. Health probe {Guid.NewGuid():N}.",
+                        },
+                    ],
                     Temperature = 0,
                     Stream = false,
                 },

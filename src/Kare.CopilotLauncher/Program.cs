@@ -361,7 +361,7 @@ internal sealed class CopilotKareApp
         startInfo.Environment["COPILOT_PROVIDER_MODEL_ID"] = modelId;
         startInfo.Environment["COPILOT_MODEL"] = modelId;
         startInfo.Environment["COPILOT_PROVIDER_MAX_PROMPT_TOKENS"] =
-            GetSetting(configValues, "KARE_MAX_PROMPT_TOKENS", input.MinimalContext ? "7936" : "23552");
+            GetSetting(configValues, "KARE_MAX_PROMPT_TOKENS", input.MinimalContext ? "7936" : "31744");
         startInfo.Environment["COPILOT_PROVIDER_MAX_OUTPUT_TOKENS"] =
             GetSetting(configValues, "KARE_MAX_OUTPUT_TOKENS", input.MinimalContext ? "256" : "1024");
         startInfo.Environment["COPILOT_HOME"] = copilotHome;
@@ -491,7 +491,7 @@ internal sealed class CopilotKareApp
         Console.WriteLine("  --kare-log-dir PATH     Use PATH for Copilot CLI logs. Implies --kare-verbose.");
         Console.WriteLine("  --kare-minimal-context  Use the offline 8192-token diagnostic profile with only bash.");
         Console.WriteLine();
-        Console.WriteLine("The default profile uses the measured 24576-token GenieX context with Copilot tools,");
+        Console.WriteLine("The default profile advertises a 32768-token routed context with Copilot tools,");
         Console.WriteLine("builtin MCP servers, and repository instructions enabled.");
         Console.WriteLine("The explicit device address overrides environment and config values.");
         Console.WriteLine("Without one, the launcher uses KARE_DEVICE_HOST, protected config, or the last working address.");

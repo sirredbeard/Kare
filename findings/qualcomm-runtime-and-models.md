@@ -67,6 +67,40 @@ https://github.com/qualcomm/ai-hub-models/tree/main/src/qai_hub_models/models/qw
 
 https://github.com/onnxruntime/onnxruntime-qnn/releases/tag/v2.6.0
 
+## Measured 2026-10-07, FastRPC degradation and recovery boundary
+
+The installed GenieX unit had drifted to `--compute cpu`. The weather request therefore ran two local cascade decisions at about 74 and 62 seconds before its cloud calls. Restoring `--compute npu` exposed a separate long-uptime failure:
+
+```
+fastrpc_mmap failed
+Cannot allocate memory
+```
+
+The failed mapping was about 1.05 GiB at both 8192 and 24576 context. Reducing the offloaded layer count did not materially change the mapping. Linux still had about 10 GiB available, so ordinary process memory pressure does not explain the failure.
+
+Restarting the GenieX process did not recover the observed failure. Rebooting the board did. After reboot, the 8192-context NPU path completed bounded route decisions in about 1.7 seconds. This points at FastRPC, DSP user-PD, SMMU, or IOVA state, but the exact cause remains unknown.
+
+Relevant Qualcomm FastRPC reports:
+
+- qualcomm/fastrpc#347 reports invoke contexts stranded after interrupted waits. It links a 2026 kernel patch.
+- qualcomm/fastrpc#349 reports cleanup races during abrupt client termination.
+- qualcomm/fastrpc#353 reports SMMU faults during repeated Qwen runs.
+- qualcomm/fastrpc#145 documents DMA heap and dmabuf requirements.
+
+These reports show credible failure classes. They do not prove which one affected this QCS8275 board.
+
+Kare now uses a conservative recovery boundary:
+
+1. Run unique one-token readiness inference probes so a response cache cannot hide a dead NPU.
+2. Mark the accelerator degraded after a failed probe or inference.
+3. Move to a configured, previously validated CPU backend when one exists.
+4. Gracefully stop GenieX, wait for FastRPC cleanup, start it, and probe once.
+5. Attempt that recycle no more than once per hour.
+6. Return to NPU only after consecutive successful probes.
+7. Never reboot the device automatically.
+
+The current device configuration does not include an ONNX CPU model path. Until one is provisioned, Kare warns that no CPU fallback is configured and can use an existing cloud cascade route. It does not claim CPU inference happened.
+
 ## Checked 2026-10-02, hunting for a Qwen2.5-Coder in ONNX Runtime GenAI format
 
 Searched the Hugging Face API rather than guessing repo names, because guessing wasted time earlier. A 404 on `huggingface.co` returns "Invalid username or password" when you curl it, which reads like an auth problem and is not.

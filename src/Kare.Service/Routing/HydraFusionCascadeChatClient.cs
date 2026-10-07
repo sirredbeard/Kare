@@ -20,6 +20,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
 {
     private const string AnswerMarker = "KARE_ANSWER:";
     private const string EscalateMarker = "KARE_ESCALATE:";
+    private const string LocalTarget = "local";
     private readonly IChatClient _local;
     private readonly ICloudInferenceBackend _cloud;
     private readonly ICloudModelCatalog _catalog;
@@ -66,7 +67,9 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToArray();
         var requiresTools = RequiresTools(materialized, options);
         var requiresImages = RequiresImages(materialized);
-        var candidates = GetCandidates(requiresTools, requiresImages);
+        var candidates = GetCandidates(
+            requiresTools || options?.Tools is { Count: > 0 },
+            requiresImages);
         if (!_options.EnableCascadeEscalation)
         {
             if (requiresImages)
@@ -115,6 +118,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         var gate = await RunLocalGateAsync(
             decisionMessages,
             candidates,
+            options?.Tools is { Count: > 0 },
             requiresTools,
             cancellationToken).ConfigureAwait(false);
         if (gate.Answer is not null && !requiresTools)
@@ -125,6 +129,15 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 FinishReason = ChatFinishReason.Stop,
                 Usage = gate.Response?.Usage,
             };
+        }
+        if (string.Equals(gate.Target, LocalTarget, StringComparison.Ordinal) &&
+            !requiresTools)
+        {
+            return await CompleteLocalAsync(
+                CreateBoundedLocalAnswerMessages(materialized),
+                options,
+                cancellationToken)
+                .ConfigureAwait(false);
         }
 
         var target = gate.Target ?? candidates[0].Id;
@@ -146,7 +159,9 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToArray();
         var requiresTools = RequiresTools(materialized, options);
         var requiresImages = RequiresImages(materialized);
-        var candidates = GetCandidates(requiresTools, requiresImages);
+        var candidates = GetCandidates(
+            requiresTools || options?.Tools is { Count: > 0 },
+            requiresImages);
         if (!_options.EnableCascadeEscalation)
         {
             if (requiresImages)
@@ -210,6 +225,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             var gate = await RunLocalGateAsync(
                 decisionMessages,
                 candidates,
+                options?.Tools is { Count: > 0 },
                 requiresTools,
                 cancellationToken)
                 .ConfigureAwait(false);
@@ -225,6 +241,19 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                     var usageUpdate = new ChatResponseUpdate();
                     usageUpdate.Contents.Add(new UsageContent(usage));
                     yield return usageUpdate;
+                }
+
+                yield break;
+            }
+            if (string.Equals(gate.Target, LocalTarget, StringComparison.Ordinal) &&
+                !requiresTools)
+            {
+                await foreach (var update in StreamLocalAsync(
+                    CreateBoundedLocalAnswerMessages(materialized),
+                    options,
+                    cancellationToken).ConfigureAwait(false))
+                {
+                    yield return update;
                 }
 
                 yield break;
@@ -257,24 +286,27 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
     private async Task<LocalGateResult> RunLocalGateAsync(
         IReadOnlyList<ChatMessage> decisionMessages,
         IReadOnlyList<CloudModelDescriptor> candidates,
-        bool requiresTools,
+        bool targetOnly,
+        bool skipKnowledgeContext,
         CancellationToken cancellationToken)
     {
         var decision = LocalDecision(
-            "HydraFusion cascade asked local Qwen to answer from authoritative context or select escalation.");
+            targetOnly
+                ? "HydraFusion cascade asked the local Qwen gate to choose local inference or the earliest valid cloud target."
+                : "HydraFusion cascade asked local Qwen to answer from authoritative context or select escalation.");
         var recording = CreateRecordingClient(_local, decision);
         var gateOptions = new ChatOptions
         {
-            ModelId = _localModelId,
+            ModelId = CurrentLocalModelId,
             Temperature = 0,
-            MaxOutputTokens = requiresTools
+            MaxOutputTokens = targetOnly
                 ? _options.CascadeToolDecisionMaxOutputTokens
                 : _options.CascadeDecisionMaxOutputTokens,
             ToolMode = ChatToolMode.None,
             AdditionalProperties = new()
             {
                 [GenieXBackend.DisableThinkingOptionName] = true,
-                [ContextEnrichingChatClient.SkipKnowledgeContextOptionName] = requiresTools,
+                [ContextEnrichingChatClient.SkipKnowledgeContextOptionName] = skipKnowledgeContext,
             },
         };
 
@@ -284,7 +316,8 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 .GetResponseAsync(decisionMessages, gateOptions, cancellationToken)
                 .ConfigureAwait(false);
             var text = GetText(response).Trim();
-            if (response.FinishReason != ChatFinishReason.Length &&
+            if (!targetOnly &&
+                response.FinishReason != ChatFinishReason.Length &&
                 text.StartsWith(AnswerMarker, StringComparison.Ordinal))
             {
                 var answer = text[AnswerMarker.Length..].Trim();
@@ -297,6 +330,16 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                         decision,
                         "Local Qwen returned an authoritative answer.");
                 }
+            }
+
+            if (string.Equals(text, LocalTarget, StringComparison.OrdinalIgnoreCase))
+            {
+                return new LocalGateResult(
+                    Answer: null,
+                    LocalTarget,
+                    response,
+                    decision,
+                    "Local Qwen selected local inference without caller-owned tools.");
             }
 
             var target = ParseTarget(text, candidates);
@@ -578,7 +621,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         };
         var judgeOptions = new ChatOptions
         {
-            ModelId = _localModelId,
+            ModelId = CurrentLocalModelId,
             Temperature = 0,
             MaxOutputTokens = _options.CascadeJudgeMaxOutputTokens,
             ToolMode = ChatToolMode.None,
@@ -701,7 +744,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             .ToArray();
 
     private static bool RequiresTools(IReadOnlyList<ChatMessage> messages, ChatOptions? options) =>
-        options?.Tools is { Count: > 0 } ||
+        options?.ToolMode is RequiredChatToolMode ||
         messages.Any(static message =>
             message.Contents.Any(static content =>
                 content is FunctionCallContent or FunctionResultContent));
@@ -742,11 +785,13 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             request.Length);
         var instructions = toolCount > 0
             ? $"""
-                You are Kare's local Qwen cascade gate. This request requires caller-owned tools,
-                so it cannot be answered locally. Return only one target ID from the ordered list.
-                Do not explain, reason, answer the request, or add a prefix. Choose the earliest
-                sufficient target. Current or live information should use the earliest target that
-                can call the supplied tools.
+                You are Kare's local Qwen cascade gate. Caller-owned tools are available, but they
+                are not automatically required. Return only "local" or one target ID from the
+                ordered list. Do not explain, reason, answer the request, or add a prefix.
+
+                Choose local only when the answer is directly supported by supplied authoritative
+                context or is simple and reliable without a tool call, repository inspection, or
+                current information. Otherwise choose the earliest sufficient cloud target.
 
                 Tool names: {toolNames}.
                 Ordered cloud targets:
@@ -797,6 +842,24 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         }
 
         return "No user text was supplied. Escalate to the first configured target.";
+    }
+
+    private IReadOnlyList<ChatMessage> CreateBoundedLocalAnswerMessages(
+        IReadOnlyList<ChatMessage> messages)
+    {
+        var request = GetLastUserText(messages);
+        if (request.Length > _options.CascadeDecisionMaxInputCharacters)
+        {
+            request = request[^_options.CascadeDecisionMaxInputCharacters..];
+        }
+
+        return
+        [
+            new ChatMessage(
+                ChatRole.System,
+                "Answer the user's bounded request directly. Use supplied authoritative context when present. Do not claim to have called tools."),
+            new ChatMessage(ChatRole.User, request),
+        ];
     }
 
     private static long CountTextCharacters(IReadOnlyList<ChatMessage> messages) =>
@@ -858,8 +921,8 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         new(
             KareRoute.LocalSlm,
             reason,
-            _localModelId,
-            _localBackend,
+            CurrentLocalModelId,
+            CurrentLocalBackend,
             IsBillable: false);
 
     private static RouteDecision CloudDecision(CloudModelDescriptor model, string reason) =>
@@ -875,9 +938,20 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
     private ChatOptions LocalOptions(ChatOptions? options)
     {
         var selected = options?.Clone() ?? new ChatOptions();
-        selected.ModelId = _localModelId;
+        selected.ModelId = CurrentLocalModelId;
+        selected.Tools = null;
+        selected.ToolMode = ChatToolMode.None;
         return selected;
     }
+
+    private ILocalBackendStatus? CurrentLocalStatus =>
+        _local.GetService<ILocalBackendStatus>();
+
+    private BackendKind CurrentLocalBackend =>
+        CurrentLocalStatus?.Kind ?? _localBackend;
+
+    private string CurrentLocalModelId =>
+        CurrentLocalStatus?.ModelId ?? _localModelId;
 
     private static ChatOptions CloudOptions(ChatOptions? options, CloudModelDescriptor candidate)
     {

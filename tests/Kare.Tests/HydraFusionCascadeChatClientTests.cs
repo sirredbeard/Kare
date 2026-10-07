@@ -233,7 +233,7 @@ public sealed class HydraFusionCascadeChatClientTests
                 options?.AdditionalProperties?.TryGetValue(
                     ContextEnrichingChatClient.SkipKnowledgeContextOptionName,
                     out var skip) == true &&
-                skip is true);
+                skip is false);
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, "KARE_ANSWER:\nUnsafe local answer."));
         });
         var cloud = new ScriptedCloudBackend();
@@ -250,6 +250,41 @@ public sealed class HydraFusionCascadeChatClientTests
 
         Assert.Equal(["fast"], cloud.ModelsCalled);
         Assert.NotNull(cloud.LastOptions?.Tools);
+    }
+
+    [Fact]
+    public async Task ToolAvailabilityCanStillSelectLocalAnswer()
+    {
+        var call = 0;
+        var local = new ScriptedChatClient((messages, options) =>
+        {
+            call++;
+            if (call == 1)
+            {
+                Assert.Equal(8, options?.MaxOutputTokens);
+                Assert.Contains("Return only \"local\"", messages[0].Text, StringComparison.Ordinal);
+                return new ChatResponse(new ChatMessage(ChatRole.Assistant, "local"));
+            }
+
+            Assert.Null(options?.Tools);
+            Assert.Equal(ChatToolMode.None, options?.ToolMode);
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "The dashboard uses port 5285."));
+        });
+        var cloud = new ScriptedCloudBackend();
+        using var cache = CreateCache();
+        using var client = CreateClient(local, cloud, cache);
+
+        var response = await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "What port does Kare's dashboard use?")],
+            new ChatOptions
+            {
+                Tools = [AIFunctionFactory.Create(() => "ok", "inspect_repository")],
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("The dashboard uses port 5285.", response.Text);
+        Assert.Empty(cloud.ModelsCalled);
+        Assert.Equal(2, local.CallCount);
     }
 
     [Fact]

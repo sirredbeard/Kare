@@ -4,6 +4,7 @@ using System.Text.Json;
 using Kare.Abstractions;
 using Kare.Service.Dashboard;
 using Kare.Service.Options;
+using Kare.Service.Routing;
 using Kare.Service.Storage;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Caching.Memory;
@@ -93,6 +94,7 @@ public sealed class ResponseCache : IDisposable
 
         if (!TryCreateKey(messages, options, streaming, out var key) ||
             response.FinishReason == ChatFinishReason.Length ||
+            LocalBackendWarningChatClient.IsWarningResponse(response) ||
             CountText(response) > _options.MaxResponseCharacters)
         {
             return;

@@ -9,6 +9,7 @@ using Kare.Service;
 using Kare.Service.Api;
 using Kare.Service.Cache;
 using Kare.Service.Dashboard;
+using Kare.Service.Inference;
 using Kare.Service.Logging;
 using Kare.Service.Options;
 using Kare.Service.Routing;
@@ -88,9 +89,22 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<GenieXOptions>, GenieXOptionsValidator>();
 
+builder.Services
+    .AddOptions<LocalBackendHealthOptions>()
+    .Bind(builder.Configuration.GetSection(LocalBackendHealthOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<
+    IValidateOptions<LocalBackendHealthOptions>,
+    LocalBackendHealthOptionsValidator>();
+
 builder.Services.AddSingleton<InferenceGate>();
 builder.Services.AddSingleton<MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
+builder.Services.AddSingleton<ILocalBackendRecovery, SystemdGenieXRecovery>();
+builder.Services.AddSingleton<LocalBackendHealthMonitor>();
+builder.Services.AddSingleton<IHostedService>(
+    sp => sp.GetRequiredService<LocalBackendHealthMonitor>());
+builder.Services.AddSingleton<SelectedBackendChatClient>();
 builder.Services.AddSingleton<ResponseCache>();
 builder.Services.AddSingleton<CascadeRouteContext>();
 builder.Services.AddSingleton<IDashboardMetricsCollector, InMemoryMetricsCollector>();
@@ -134,11 +148,14 @@ builder.Services.AddSingleton<IChatClient>(sp =>
 
     // These bounds protect only the passive local SLM. Cloud routes must be able to
     // accept the larger prompts sent by Copilot CLI and other OpenAI clients.
-    IChatClient boundedLocal = new BoundedChatClient(selected.Backend, gate, limits);
+    IChatClient boundedLocal = new BoundedChatClient(
+        sp.GetRequiredService<SelectedBackendChatClient>(),
+        gate,
+        limits);
     boundedLocal = new ContextEnrichingChatClient(
         boundedLocal,
         sp.GetRequiredService<IDashboardKnowledgeService>());
-    return new HydraFusionCascadeChatClient(
+    IChatClient routed = new HydraFusionCascadeChatClient(
         boundedLocal,
         sp.GetRequiredService<ICloudInferenceBackend>(),
         sp.GetRequiredService<ICloudModelCatalog>(),
@@ -149,6 +166,7 @@ builder.Services.AddSingleton<IChatClient>(sp =>
         selected.Kind,
         selected.ModelId,
         sp.GetRequiredService<ILoggerFactory>());
+    return new LocalBackendWarningChatClient(routed, selected);
 });
 
 builder.Services.Configure<KestrelServerOptions>(options =>
@@ -180,7 +198,9 @@ app.MapOpenAiCompatibleApi();
 var selection = await app.Services.GetRequiredService<LocalBackendSelector>()
     .SelectAsync(app.Lifetime.ApplicationStopping);
 
-app.Services.GetRequiredService<SelectedBackend>().Set(selection.Backend);
+app.Services.GetRequiredService<SelectedBackend>().Set(
+    selection,
+    app.Services.GetServices<ILocalInferenceBackend>());
 
 await app.RunAsync();
 

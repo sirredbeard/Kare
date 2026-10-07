@@ -17,6 +17,27 @@ GitHub authentication is not required once a custom provider is configured.
 
 The provider config can also live in a `providers.json` file resolved from `COPILOT_PROVIDERS_CONFIG` or the CLI config directory. The environment path is what was tested.
 
+## Measured 2026-10-07, routed context and tool availability
+
+Copilot CLI's static context warning reached 82 percent during the device QA session. The warning was based on the 23552-token provider prompt limit, not on a FastRPC failure. Kare now advertises 31744 prompt tokens and reserves 1024 output tokens. This is a routed context budget. The local cascade still receives at most the final 1024 request characters plus bounded authoritative context.
+
+Copilot CLI includes its tool catalogue on ordinary chat requests. Kare had treated tool availability as proof that every request needed a tool-capable cloud model. A dashboard-port question therefore spent:
+
+```
+local NPU route gate   1.732 seconds
+Copilot cloud answer   2.781 seconds
+```
+
+The question was already supported by Kare's authoritative repository context. The route gate now returns only `local` or a cloud target when tools are available. A local choice runs a second bounded local answer request with tools removed. Existing cloud target caching still handles assistant tool calls and tool results, so continuations do not run a second route gate.
+
+The OpenAI chat-completions wire format does not expose Copilot CLI's native provider-warning event. Kare therefore prepends one assistant warning to the first response after an NPU degradation episode:
+
+```
+! Kare's local NPU is unavailable. Local routing is using the CPU fallback until FastRPC recovers.
+```
+
+If no validated CPU backend is configured, the warning says so instead of claiming CPU inference occurred.
+
 ## What passed
 
 Both local backends passed the smoke suite on the board: health, model listing, empty-messages rejection, non-streaming completion, and streaming completion, each with route metadata attached.

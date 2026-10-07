@@ -80,12 +80,14 @@ The measured layout, retention rules, and current PCIe link investigation live i
 - Qwen3 through GenieX on the VENTUNO Q.
 - Qwen3 and Phi-4-mini through ONNX Runtime GenAI on ARM64.
 - A bounded local answer-or-route decision.
+- Long-lived NPU health checks with one bounded GenieX recovery attempt.
+- A Copilot-visible warning when local routing leaves the NPU.
 - GitHub Copilot SDK text and caller-owned tool-call routes.
 - A response cache with bounded metadata.
 - An operations dashboard for routes, latency, cache metadata, skills, sources, and MCP status.
 - The cross-platform `copilot-kare` launcher.
 
-The first context problem is solved. Qwen3.5 0.8B Q4_0 now runs through GenieX with a measured 24576-token window, enough for Copilot CLI 1.0.92 to load all 26 tools, repository instructions, and the builtin GitHub MCP server. The model still has to pass representative coding quality, sustained latency, and thermal checks.
+The first context problem is solved at the routing boundary. Copilot CLI can advertise a 32768-token routed context while Kare sends only bounded request text and selected authoritative context to the local Qwen gate. The local runtime still has to pass representative coding quality, sustained latency, and thermal checks.
 
 ## Build the server for the Arduino
 
@@ -109,6 +111,14 @@ The device publish path now fails before deployment when `kare-geniex.service`
 is not using the expected NPU compute target or cannot complete a bounded
 inference. Set `KARE_GENIEX_EXPECTED_COMPUTE` only when intentionally validating
 another compute target.
+
+Kare also probes the preferred accelerator while it is running. One failed
+health episode can trigger one graceful `kare-geniex.service` stop and start
+after a cleanup delay. Kare never reboots the device automatically. When a
+configured ONNX CPU backend is healthy, local requests move there until two
+NPU probes pass. Copilot chat receives one warning for the episode. Without a
+configured CPU model, Kare reports that fact and may use an existing cloud
+cascade route instead.
 
 The script creates a commit-specific release, switches the `current` symlink, restarts the user service, and waits for `/health`.
 
@@ -150,9 +160,9 @@ After the first healthy connection, the launcher remembers the last working addr
 
 `copilot-kare` opens the SSH tunnel, waits for Kare, supplies the Copilot BYOK environment, starts GitHub Copilot CLI, and cleans up the tunnel when Copilot exits.
 
-The board runs Qwen3.5 0.8B Q4_0 through GenieX with a 24576-token context. `copilot-kare` advertises 23552 prompt tokens and reserves 1024 output tokens, which fits Copilot CLI 1.0.92 with all 26 tools, repository instructions, and the builtin GitHub MCP server enabled.
+`copilot-kare` advertises 31744 prompt tokens and reserves 1024 output tokens. This gives Copilot CLI a 32768-token routed context for tools, repository instructions, and builtin MCP servers. Kare does not send that full wrapper to the local gate.
 
-A full test prompt completed through Kare in 43 seconds with 22.9k input tokens. Kare limits the local cascade decision to the last 1024 request characters and 32 output tokens so Copilot's static wrapper does not spend two minutes in the routing gate.
+A full test prompt completed through Kare in 43 seconds with 22.9k input tokens. Kare limits the local cascade decision to the last 1024 request characters and 32 output tokens. When caller tools are merely available, the gate uses an 8-token `local` or cloud-target decision. Tool continuations reuse the cached cloud target.
 
 Use `--kare-minimal-context` for the earlier offline diagnostic profile. It disables builtin MCP servers and repository instructions, exposes only `bash`, advertises 7936 prompt tokens, and reserves 256 output tokens.
 

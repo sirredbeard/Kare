@@ -2,6 +2,7 @@ using Kare.Abstractions;
 using Kare.Service.Cache;
 using Kare.Service.Dashboard;
 using Kare.Service.Options;
+using Kare.Service.Routing;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -40,6 +41,22 @@ public sealed class ResponseCacheTests
             options,
             streaming: false,
             new ChatResponse(new ChatMessage(ChatRole.Assistant, "not cached")));
+
+        Assert.False(cache.TryGet(messages, options, streaming: false, out _));
+    }
+
+    [Fact]
+    public void FallbackWarningIsNotCached()
+    {
+        using var cache = CreateCache();
+        var messages = new[] { new ChatMessage(ChatRole.User, "hello") };
+        var options = new ChatOptions { ModelId = "kare-local", Temperature = 0 };
+        var response = new ChatResponse(
+            new ChatMessage(
+                ChatRole.Assistant,
+                LocalBackendWarningChatClient.WarningPrefix + ". CPU fallback."));
+
+        cache.Set(messages, options, streaming: false, response);
 
         Assert.False(cache.TryGet(messages, options, streaming: false, out _));
     }

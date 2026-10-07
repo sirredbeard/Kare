@@ -147,29 +147,48 @@ public sealed class RouteRecordingChatClient : DelegatingChatClient
             usage?.OutputTokenCount,
             succeeded);
 
-        LogRoute(measured);
+        var decision = CurrentDecision();
+        LogRoute(decision, measured);
 
-        await _recorder.RecordAsync(_decision, measured, cancellationToken).ConfigureAwait(false);
+        await _recorder.RecordAsync(decision, measured, cancellationToken).ConfigureAwait(false);
     }
 
-    private void LogRoute(RouteUsage usage)
+    private RouteDecision CurrentDecision()
     {
-        if (_decision.IsFallback)
+        if (_decision.Route != KareRoute.LocalSlm ||
+            InnerClient.GetService<ILocalBackendStatus>() is not { } status)
+        {
+            return _decision;
+        }
+
+        return _decision with
+        {
+            Backend = status.Kind,
+            ModelId = status.ModelId,
+            Reason = status.IsCpuFallback
+                ? $"{_decision.Reason} The preferred NPU was unavailable, so the configured CPU backend served local inference."
+                : _decision.Reason,
+        };
+    }
+
+    private void LogRoute(RouteDecision decision, RouteUsage usage)
+    {
+        if (decision.IsFallback)
         {
             _logger.LogWarning(
                 "Route {Route} served the request after falling back from {FellBackFrom}. Reason: {Reason}. Backend: {Backend}.",
-                _decision.Route,
-                _decision.FellBackFrom,
-                _decision.Reason,
-                _decision.Backend);
+                decision.Route,
+                decision.FellBackFrom,
+                decision.Reason,
+                decision.Backend);
         }
 
         _logger.LogInformation(
             "Route {Route} backend {Backend} model {ModelId} billable {IsBillable} ttft {TimeToFirstTokenMs}ms total {TotalMs}ms out {OutputTokens} succeeded {Succeeded}.",
-            _decision.Route,
-            _decision.Backend,
-            _decision.ModelId,
-            _decision.IsBillable,
+            decision.Route,
+            decision.Backend,
+            decision.ModelId,
+            decision.IsBillable,
             (long)usage.TimeToFirstToken.TotalMilliseconds,
             (long)usage.TotalDuration.TotalMilliseconds,
             usage.OutputTokens,

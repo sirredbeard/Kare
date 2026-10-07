@@ -24,6 +24,25 @@ public interface ILocalInferenceBackend : IChatClient
     ValueTask<BackendProbeResult> ProbeAsync(CancellationToken cancellationToken = default);
 }
 
+/// <summary>The local backend currently serving Kare requests.</summary>
+public interface ILocalBackendStatus
+{
+    /// <summary>The active execution path.</summary>
+    BackendKind Kind { get; }
+
+    /// <summary>The active model identifier.</summary>
+    string ModelId { get; }
+
+    /// <summary>Whether the preferred accelerator is unavailable.</summary>
+    bool IsDegraded { get; }
+
+    /// <summary>Whether a configured CPU backend is serving local requests.</summary>
+    bool IsCpuFallback { get; }
+
+    /// <summary>A bounded reason that does not contain prompt contents or secrets.</summary>
+    string? DegradedReason { get; }
+}
+
 /// <summary>
 /// The result of a backend availability probe.
 /// </summary>
