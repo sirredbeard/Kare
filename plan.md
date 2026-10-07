@@ -502,21 +502,29 @@ Do not use the database as a token cache or a dumping ground for complete reposi
 
 ### NVMe storage plan
 
-The VENTUNO Q now has a 476.9 GiB OSCOO PCIe 512GB NVMe drive at `/dev/nvme0n1`. It is unpartitioned and unmounted. The controller is a DRAM-less MAXIO MAP1602. The PCIe root port advertises Gen4 x4, but the active link is Gen4 x1. A privileged direct read reached 1.6 GB/s, compared with the earlier 294 MB/s eMMC read. Investigate the downgraded link before treating the storage path as complete.
+The VENTUNO Q now has a 476.9 GiB OSCOO PCIe 512GB NVMe drive at `/dev/nvme0n1p1`, mounted at `/var/lib/kare`. The controller is a DRAM-less MAXIO MAP1602. The PCIe root port advertises Gen4 x4, but the active link is Gen4 x1. A privileged direct read reached 1.6 GB/s, compared with the earlier 294 MB/s eMMC read. Investigate the downgraded link before treating the storage path as complete.
 
-Keep the operating system, boot files, service checkout, and rollback release on eMMC. Use an ext4 filesystem mounted at `/var/lib/kare` for models, compiled accelerator artifacts, logs, PostgreSQL, cache data, indexes, benchmark results, and encrypted backups. Use explicit configuration paths instead of making the service guess whether a symlink or drive is present.
+Keep the operating system, boot files, service checkout, and rollback release on eMMC. Use the ext4 filesystem at `/var/lib/kare` for model files and compiled accelerator artifacts. Use explicit configuration paths instead of making the service guess whether a symlink or drive is present.
 
-Roll out storage in stages:
+The first migration is complete:
 
-1. Record `nvme-cli` identity and SMART data, then check firmware, device tree, kernel messages, and physical seating for the x1 link.
-2. Verify full capacity and sustained read, write, random I/O, fsync, temperature, and throttling behavior before trusting the drive.
-3. Mount the drive with bounded retention and scheduled trim. Keep the service binary on eMMC until the data paths are proven.
-4. Move model files and compiled runtime artifacts first. Measure cold loads and model swaps.
-5. Move logs, benchmark results, and encrypted backups next. Keep each retention policy separate.
-6. Move PostgreSQL and future persistent cache data only after fsync and recovery tests pass.
-7. Add storage health and capacity metadata to the dashboard without exposing serial numbers, prompts, source code, or credentials.
+1. The NVMe drive was partitioned as GPT and formatted as ext4 with `noatime`.
+2. GenieX model data moved to `/var/lib/kare/models/geniex`.
+3. The GenieX Linux ARM64 runtime moved to `/var/lib/kare/runtimes/geniex`.
+4. The GenieX user service now uses `GENIEX_DATADIR=/var/lib/kare/models/geniex`.
+5. Kare and GenieX restarted successfully, and both `/health` and `/v1/models` passed.
+6. Existing Kare and Azure command logs, GenieX cache data, and the old cloud catalog backup were deleted instead of copied.
 
-NVMe should improve model startup, model switching, cache and database writes, retrieval, indexing, and backups. It will not change GenieX token latency after the model is resident in memory. Measure first-token latency separately from storage latency.
+Do not add persistent logs, response-cache data, or backups to the NVMe layout. The response cache remains process-local and bounded. PostgreSQL, indexes, and benchmark artifacts are future work, not part of this migration.
+
+The remaining storage work is narrow:
+
+1. Install `nvme-cli` and record SMART data, temperature, percentage used, and media errors.
+2. Investigate the Gen4 x1 negotiation through firmware, device tree, kernel, and physical seating checks.
+3. Measure cold model load, warm model load, and sustained temperature after the move.
+4. Add storage health metadata to the dashboard without exposing serial numbers, prompts, source code, or credentials.
+
+NVMe should improve model startup and model switching. It will not change GenieX token latency after the model is resident in memory. Measure first-token latency separately from storage latency.
 
 Use separate records for:
 

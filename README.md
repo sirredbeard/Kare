@@ -49,7 +49,7 @@ I am running Kare on an [Arduino VENTUNO Q](https://www.arduino.cc/product-ventu
 - Qualcomm Hexagon V75 NPU and Adreno 623 GPU.
 - 16 GB LPDDR5 memory.
 - 64 GB eMMC.
-- A 512 GB OSCOO PCIe NVMe drive in the M.2 slot for models, indexes, logs, and cache data. It currently negotiates a PCIe Gen4 x1 link and is not mounted yet.
+- A 512 GB OSCOO PCIe NVMe drive in the M.2 slot. It is mounted at `/var/lib/kare` and currently negotiates a PCIe Gen4 x1 link.
 
 The service is .NET 11. GitHub Copilot CLI runs on the workstation, `copilot-kare` opens a protected SSH tunnel to the board, and Kare listens on loopback.
 
@@ -64,6 +64,31 @@ Kare on the VENTUNO Q
         +-- Qwen through GenieX
         +-- ONNX CPU fallback
         +-- explicit GitHub Copilot or configured cloud route
+```
+
+## NVMe storage
+
+The board boots from eMMC. The model and native runtime data now live on a separate 512 GB NVMe drive mounted at `/var/lib/kare`.
+
+That split is deliberate. The NVMe read test reached 1.6 GB/s, compared with 294 MB/s from the eMMC. The drive also gives model files and native runtime files a replaceable home, so repeated model work does not grind on the boot device.
+
+The current layout is:
+
+```text
+/var/lib/kare/
+  models/geniex/       GenieX model data
+  runtimes/geniex/     GenieX Linux ARM64 runtime
+```
+
+The service checkout, published Kare releases, protected configuration, and systemd user units remain on eMMC. Kare does not retain persistent logs, response-cache data, or backups on the NVMe drive. The bounded response cache is process-local and starts empty after a restart.
+
+The drive currently negotiates PCIe Gen4 x1 even though the root port advertises x4. That is good enough to make the storage useful, however the link is still an open hardware investigation.
+
+To inspect the layout on the board:
+
+```bash
+findmnt -T /var/lib/kare
+du -sh /var/lib/kare/models /var/lib/kare/runtimes
 ```
 
 ## What works today

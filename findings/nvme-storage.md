@@ -260,31 +260,32 @@ The first read-only test transferred 1 GiB with direct I/O at 1.6 GB/s. That is 
 
 ## NVMe rollout plan
 
-Do not format the drive until the PCIe link and device health have been recorded. The order matters:
+The first migration is complete:
 
-1. Install `nvme-cli` outside the repository and record controller identity, namespace size, SMART counters, temperature, power states, percentage used, media errors, and data units written.
-2. Check the board firmware, device tree, PCIe root-port configuration, kernel messages, and physical seating. Reseat the module if the board documentation allows it. Repeat the link check after each change.
-3. Run a destructive full-capacity write and verification only after the drive identity and return path are recorded. This is a new drive, and fake capacity is unlikely, however storage gets tested before Kare trusts it.
-4. Create one GPT partition and an ext4 filesystem. Mount it at `/var/lib/kare` with an explicit systemd mount or `fstab` entry, `noatime`, and a scheduled `fstrim`. Do not put the OS or boot files there.
-5. Keep the service binary and project checkout on eMMC for now. Put model files, compiled accelerator artifacts, logs, benchmark results, backups, and future indexes under the NVMe data root through explicit configuration paths.
-6. Move the future PostgreSQL data directory to NVMe only after measuring fsync latency, random writes, temperature, and sustained behavior. PostgreSQL is the planned persistence layer, but it is not a reason to skip the storage gate.
-7. Keep the current response cache in memory until the persistent cache has repository fingerprints, privacy classification, expiry, invalidation, and deletion. NVMe makes persistence practical, it does not make an unsafe cache safe.
-8. Add a small storage health surface to the operations dashboard: mount state, free space, model residency, cache size, database size, temperature, percentage used, and the last successful health sample. Do not display serial numbers or protected configuration.
-9. Benchmark cold model load, warm model load, cache writes, context retrieval, PostgreSQL reads and writes, log rotation, and backup creation on eMMC and NVMe. Record first-token latency separately so storage improvements are not confused with inference improvements.
+1. The drive was partitioned as GPT and formatted as ext4 with `noatime`, then mounted at `/var/lib/kare`.
+2. The GenieX model data moved to `/var/lib/kare/models/geniex`.
+3. The GenieX Linux ARM64 runtime moved to `/var/lib/kare/runtimes/geniex`.
+4. The `kare-geniex.service` unit now uses `GENIEX_DATADIR=/var/lib/kare/models/geniex`.
+5. Kare and GenieX restarted successfully, and both `/health` and `/v1/models` passed.
+6. Existing Kare and Azure command logs, GenieX cache data, and the old cloud catalog backup were deleted instead of copied.
+
+The service checkout, published Kare releases, protected configuration, and systemd user units remain on eMMC. No persistent logs, response-cache data, or backups were added to the NVMe layout. The bounded response cache remains process-local and starts empty after restart.
+
+The remaining storage work is narrow:
+
+1. Install `nvme-cli` and record SMART data, temperature, percentage used, and media errors.
+2. Investigate the Gen4 x1 negotiation through firmware, device tree, kernel, and physical seating checks.
+3. Measure cold model load, warm model load, and sustained temperature after the move.
+4. Add storage health metadata to the dashboard without exposing serial numbers, prompts, source code, or credentials.
 
 The first useful layout is:
 
 ```
 /var/lib/kare/
-  models/
-  runtimes/
-  cache/
-  postgres/
-  logs/
-  benchmarks/
-  backups/
+  models/geniex/
+  runtimes/geniex/
 ```
 
-Use separate retention limits for `cache`, `logs`, `benchmarks`, and `backups`. Keep model directories checksummed and versioned. Do not store prompts, source code, credentials, or copied Copilot settings in a general-purpose storage directory just because it is large.
+Keep model directories checksummed and versioned. Do not store prompts, source code, credentials, logs, cache entries, backups, or copied Copilot settings in a general-purpose storage directory just because it is large.
 
-The drive is a storage and startup improvement, not an inference accelerator. GenieX still owns token latency. NVMe should reduce cold model load time, move write-heavy state away from the boot eMMC, and give context, cache, index, and backup work room to grow.
+The drive is a storage and startup improvement, not an inference accelerator. GenieX still owns token latency. NVMe should reduce cold model load time and move the native runtime and model data away from the boot eMMC.

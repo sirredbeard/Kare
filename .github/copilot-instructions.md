@@ -115,6 +115,29 @@ Publish and test the device service with:
 
 Keep the checked-out device branch synchronized with Git. Do not copy source trees or credentials through ad hoc deployment commands. `build/deploy.sh` is only for copying an already-published artifact when Git-based device iteration is not available.
 
+## Device storage layout
+
+The VENTUNO Q boots from eMMC. The installed OSCOO PCIe 512GB drive is `/dev/nvme0n1p1`, formatted as ext4, and mounted at `/var/lib/kare` with `noatime`.
+
+Keep these items on eMMC:
+
+- The operating system and boot files.
+- The Kare checkout at `%h/Kare`.
+- Published Kare releases under `%h/kare/service`.
+- Protected configuration under `%h/.config/kare`.
+- User systemd units under `%h/.config/systemd/user`.
+
+Keep these items on NVMe:
+
+- `/var/lib/kare/models/geniex` - GenieX model data.
+- `/var/lib/kare/runtimes/geniex` - the GenieX Linux ARM64 runtime and native libraries.
+
+The `kare-geniex.service` user unit uses `GENIEX_DATADIR=/var/lib/kare/models/geniex` and loads its executable and libraries from `/var/lib/kare/runtimes/geniex`. Do not move the Kare service checkout or release symlink without a separate rollback plan.
+
+Kare does not retain persistent logs, response-cache data, or backups in the NVMe layout. The bounded response cache is process-local and starts empty after restart. Do not add a database, log directory, backup directory, or cache directory to `/var/lib/kare` without an explicit retention, deletion, and recovery policy.
+
+The drive currently negotiates PCIe Gen4 x1 even though the root port advertises x4. Record that fact in performance notes and do not describe the storage path as a full Gen4 x4 path until firmware, device tree, kernel, and physical seating checks explain it.
+
 ## Copilot integration
 
 The supported path is GitHub Copilot CLI BYOK pointed at Kare's OpenAI-compatible `/v1` endpoint. That requires streaming and tool-call metadata on the wire.
