@@ -41,6 +41,7 @@ public sealed class LocalBackendHealthTests
                 ExecutablePath = executable,
                 WorkingDirectory = directory,
                 DataDirectory = directory,
+                NativeLibraryPath = directory,
                 Compute = "npu",
             };
 

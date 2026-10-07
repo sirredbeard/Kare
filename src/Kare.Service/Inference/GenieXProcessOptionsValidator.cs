@@ -36,6 +36,13 @@ public sealed class GenieXProcessOptionsValidator : IValidateOptions<GenieXProce
                 "Kare:Inference:GenieXProcess:DataDirectory must be an existing absolute directory.");
         }
 
+        if (!Path.IsPathRooted(options.NativeLibraryPath) ||
+            !Directory.Exists(options.NativeLibraryPath))
+        {
+            return ValidateOptionsResult.Fail(
+                "Kare:Inference:GenieXProcess:NativeLibraryPath must be an existing absolute directory.");
+        }
+
         if (!AllowedComputeTargets.Contains(options.Compute, StringComparer.Ordinal))
         {
             return ValidateOptionsResult.Fail(

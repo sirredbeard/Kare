@@ -145,6 +145,7 @@ public sealed class GenieXProcessManager :
         startInfo.ArgumentList.Add("--power-mode");
         startInfo.ArgumentList.Add(_options.PowerMode);
         startInfo.Environment["GENIEX_DATADIR"] = _options.DataDirectory;
+        startInfo.Environment["LD_LIBRARY_PATH"] = _options.NativeLibraryPath;
 
         var process = Process.Start(startInfo) ??
             throw new InvalidOperationException("Kare could not start the configured GenieX process.");

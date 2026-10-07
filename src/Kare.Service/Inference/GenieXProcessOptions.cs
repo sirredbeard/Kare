@@ -15,6 +15,8 @@ public sealed class GenieXProcessOptions
 
     public string DataDirectory { get; set; } = string.Empty;
 
+    public string NativeLibraryPath { get; set; } = string.Empty;
+
     [Range(1024, 131072)]
     public int ContextTokens { get; set; } = 8192;
 

@@ -52,6 +52,7 @@ Kare-owned GenieX process settings use the protected service configuration:
 - `Kare__Inference__GenieXProcess__ExecutablePath`
 - `Kare__Inference__GenieXProcess__WorkingDirectory`
 - `Kare__Inference__GenieXProcess__DataDirectory`
+- `Kare__Inference__GenieXProcess__NativeLibraryPath`
 - `Kare__Inference__GenieXProcess__ContextTokens`
 - `Kare__Inference__GenieXProcess__Compute`
 - `Kare__Inference__GenieXProcess__PowerMode`
