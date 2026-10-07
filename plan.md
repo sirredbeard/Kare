@@ -7,6 +7,7 @@ This document is a plan, not a claim that the design has been proven. The servic
 ## Contents
 
 - [What we know](#what-we-know)
+- [Unified epic: local-first routing, bounded knowledge, and durable restore](#unified-epic-local-first-routing-bounded-knowledge-and-durable-restore)
 - [What is still unknown](#what-is-still-unknown)
 - [Technology choices](#technology-choices)
 - [Proposed system](#proposed-system)
@@ -21,6 +22,97 @@ This document is a plan, not a claim that the design has been proven. The servic
 - [Build stages](#build-stages)
 - [Risks](#risks)
 - [Sources](#sources)
+
+## Unified epic: local-first routing, bounded knowledge, and durable restore
+
+This is the umbrella plan for #4, #5, and #6. The detailed current-state review, external code research, unknowns, and source trail are in [`findings/kare-epic-local-first-routing-and-backup.md`](findings/kare-epic-local-first-routing-and-backup.md).
+
+The problem is no longer whether Kare can route one request. It can. The problem is deciding what local context is relevant, when a local answer is good enough, when a cloud call is worth it's cost, and which state must survive a device failure.
+
+The current request path is:
+
+```text
+OpenAI-compatible request
+  -> conservative response cache
+  -> local Qwen answer-or-route gate
+  -> ordered Copilot or Foundry cascade
+  -> route and usage record
+```
+
+The main defect is context selection. `DashboardKnowledgeService` currently appends every enabled source, every enabled skill body, and every connected MCP server description until a shared 12,000-character limit is full. Registration order can decide what Qwen sees. Tool-bearing route decisions skip that content completely.
+
+The target path is:
+
+```text
+request
+  -> policy, capability, and privacy checks
+  -> repository and context fingerprint
+  -> validated local caches
+  -> request-specific source, code, skill, and MCP selection
+  -> bounded local answer-or-route gate
+      -> single
+      -> cascade with judge and one repair
+      -> critique with one read-only critic and one revision
+  -> complete per-leg accounting
+  -> bounded persistence and incremental backup stream
+```
+
+### Workstream order
+
+1. **Baseline the current routes.** Build a representative task corpus and record always-local, light-cloud, and strong-cloud quality, latency, cache, and cost.
+2. **Land #4 as the context broker.** Normalize and hash source, skill, code, and MCP records. Add lexical and metadata retrieval, progressive skill disclosure, MCP descriptor caching, request-specific ranking, provenance, and separate context budgets.
+3. **Tighten cache identity.** Add repository revision, selected file hashes, source chunks, skill versions, MCP result hashes, model identity, route-policy version, and privacy class where each cache needs them.
+4. **Land #5 on top of selected context.** Keep the measured 1,024-character, 32-token route gate. Add deterministic result checks, a small judge packet, one stronger repair, bounded critique, sticky provider routing, and complete accounting.
+5. **Land #6 against the versioned records.** Stream state changes to Azure PostgreSQL, write six-hour manifests, retain 14 days of device restore points, and test both point-in-time recovery and a new-device clone.
+6. **Tune from measurements.** Set retrieval thresholds, top-k values, context shares, model priorities, and timeouts from the VENTUNO Q corpus. Do not copy unmeasured numbers into policy.
+
+### Context broker rules
+
+- Start with exact, lexical, and metadata search. Add local vectors only after a measured quality lift.
+- Keep skill names and descriptions in the catalog. Load complete `SKILL.md` bodies only for selected skills, then load referenced resources only when needed.
+- Cache MCP `initialize` and `tools/list` results. Put only selected descriptors in context.
+- Keep caller mutation tools with Copilot or the calling client.
+- Permit Kare-owned MCP calls only for administrator-approved read-only knowledge tools with deadlines, byte limits, privacy classes, and result-cache rules.
+- Give code, sources, skills, MCP results, and provenance separate context budgets so one large record cannot crowd out every other class.
+
+### Routing rules
+
+- A validated cache hit or one local answer is the cheapest `single` path.
+- The answer-or-route gate and the result judge are separate jobs.
+- Deterministic checks run before a model judge.
+- A failed judge gets one stronger repair attempt.
+- Critique uses a different model family, no mutation tools, and one revision.
+- Failover is allowed only before output is committed.
+- Keep provider, model, deployment, and stable prompt prefix sticky while healthy so provider prompt caching can work.
+- Do not send every cloud answer back through the local model. Local synthesis after narrow cloud evidence must beat one direct cloud call in a benchmark.
+
+### Cache and restore rules
+
+- Separate artifact, parsed-content, retrieval, route, response, MCP, and provider prompt-cache accounting.
+- Keep final response caching conservative and off for agentic tool flows by default.
+- Back up source and skill records, indexes, eligible cache records, MCP descriptors, route policy, model catalogs without secrets, accounting, prompt-template versions, and protected logs allowed by policy.
+- Do not claim Kare can export or restore GitHub or Foundry provider-owned prompt caches.
+- Verify parser, index, route-policy, tokenizer, and model compatibility before restored cache records can serve traffic.
+
+### Epic gates
+
+The baseline must measure:
+
+- local resolution and false-local rates;
+- cache and route-cache hit rates;
+- billable Copilot and Foundry calls avoided;
+- AI credits and Foundry token cost by task class;
+- first-token and total latency by leg;
+- retrieval hits for known relevant records;
+- skill trigger precision and recall;
+- MCP descriptor and result-cache hits;
+- judge accept, repair, and critique rates;
+- answer quality against always-local and always-strong baselines;
+- restore completeness and time.
+
+Final numeric targets remain open until that corpus runs on the VENTUNO Q. The intended result is a material reduction in billable work without a material quality loss, and both uses of "material" need measured numbers.
+
+This remains a bounded Kare design. It does not claim BYOK preserves GitHub's private HydraFusion, it does not add another transparent model interception layer, and it does not turn the dashboard registry into a broad crawler.
 
 ## What we know
 
