@@ -14,6 +14,7 @@ public sealed class LocalBackendHealthMonitor : BackgroundService
     private readonly SemaphoreSlim _checkRequested = new(0, 1);
     private DateTimeOffset _lastRecoveryAttemptUtc = DateTimeOffset.MinValue;
     private int _consecutiveSuccesses;
+    private int _forceRecovery;
 
     public LocalBackendHealthMonitor(
         SelectedBackend selected,
@@ -39,10 +40,20 @@ public sealed class LocalBackendHealthMonitor : BackgroundService
         }
     }
 
+    public void RequestRecovery()
+    {
+        Interlocked.Exchange(ref _forceRecovery, 1);
+        RequestCheck();
+    }
+
     internal async Task CheckOnceAsync(CancellationToken cancellationToken)
     {
         var preferred = _selected.PreferredBackend;
-        var result = await preferred.ProbeAsync(cancellationToken).ConfigureAwait(false);
+        var forceRecovery = Interlocked.Exchange(ref _forceRecovery, 0) == 1;
+        var result = forceRecovery
+            ? BackendProbeResult.Unavailable(
+                "A cancelled local inference may still be occupying the GenieX process.")
+            : await preferred.ProbeAsync(cancellationToken).ConfigureAwait(false);
         if (result.IsAvailable)
         {
             _consecutiveSuccesses++;

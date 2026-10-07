@@ -46,6 +46,16 @@ The launcher reads these values when present:
 - `KARE_LOG_FILE_BYTES`
 - `KARE_LOG_TOTAL_BYTES`
 
+Kare-owned GenieX process settings use the protected service configuration:
+
+- `Kare__Inference__GenieXProcess__Enabled`
+- `Kare__Inference__GenieXProcess__ExecutablePath`
+- `Kare__Inference__GenieXProcess__WorkingDirectory`
+- `Kare__Inference__GenieXProcess__DataDirectory`
+- `Kare__Inference__GenieXProcess__ContextTokens`
+- `Kare__Inference__GenieXProcess__Compute`
+- `Kare__Inference__GenieXProcess__PowerMode`
+
 The launcher writes the last healthy device address to `last-device-host` beside the protected config. It must write the file only after `/health` succeeds and use mode `600` on Unix.
 
 Keep service settings, cloud model catalogs, provider endpoints, deployment names, authentication state, and device-specific paths in protected external files. `examples/KARE_CONFIG_FILE.example.json` is a schema example, not a deployable configuration.
@@ -107,7 +117,7 @@ WantedBy=default.target
 
 Keep `service.env` mode `600`. It may point `KARE_CONFIG_FILE` at the protected service JSON and set native runtime paths, but it must not contain values copied into issues, logs, or the repository.
 
-Do not make `kare.service` require `kare-geniex.service`. A hard `Requires=` dependency stops Kare when GenieX is stopped for recovery, which prevents Kare from warning the client or completing the recovery. Until Kare owns the GenieX process directly, use `Wants=kare-geniex.service` with `After=kare-geniex.service`.
+The normal path is now Kare-owned GenieX. Set the protected GenieX process settings, disable `kare-geniex.service`, and do not add a GenieX `Requires=`, `Wants=`, `After=`, or `ExecStartPre=` dependency to `kare.service`. A hard dependency prevents Kare from warning the client or completing recovery when the sidecar is unhealthy. Keep the external GenieX unit only as a rollback path.
 
 Enable the unit once:
 
@@ -126,7 +136,7 @@ Publish and test the device service with:
 
 The publish script runs `build/device-geniex-guard.sh` before and after deployment. The guard fails when `kare-geniex.service` is not using the expected `npu` compute target or when a bounded inference fails. Use `KARE_GENIEX_EXPECTED_COMPUTE` only for an intentional measured comparison.
 
-Kare's runtime health monitor probes the preferred accelerator every five minutes and immediately after a local inference failure. It may gracefully stop and start `kare-geniex.service` once per hour, with a cleanup delay between operations. It must not reboot the device. Return to NPU only after consecutive successful probes. Use a configured and already validated ONNX CPU backend when one exists. Otherwise warn in Copilot chat that no CPU fallback is configured and let the existing route policy decide whether a cloud route is available.
+Kare's runtime health monitor probes the preferred accelerator every five minutes and immediately after a local inference failure. Kare owns the configured GenieX child process and may gracefully recycle it once per hour, with a cleanup delay between operations. It must not invoke systemd for recovery and must not reboot the device. Return to NPU only after consecutive successful probes. Use a configured and already validated ONNX CPU backend when one exists. Otherwise warn in Copilot chat that no CPU fallback is configured and let the existing route policy decide whether a cloud route is available.
 
 Keep the checked-out device branch synchronized with Git. Do not copy source trees or credentials through ad hoc deployment commands. `build/deploy.sh` is only for copying an already-published artifact when Git-based device iteration is not available.
 
@@ -137,7 +147,7 @@ Use this workflow for normal device changes:
 3. SSH to the device checkout and run `git pull --ff-only`.
 4. Stop `kare.service`.
 5. Run `./build/device-publish.sh --jit --test`.
-6. Confirm `kare.service` and `kare-geniex.service` are active.
+6. Confirm `kare.service` is active and `http://127.0.0.1:18181/v1/models` responds.
 7. Check `http://127.0.0.1:5285/health` and `http://127.0.0.1:18181/v1/models`.
 
 Do not rebuild from an uncommitted source copy on the device. Do not use Native AOT for the normal iteration path.

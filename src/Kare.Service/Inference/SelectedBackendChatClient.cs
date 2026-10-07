@@ -43,6 +43,13 @@ public sealed class SelectedBackendChatClient : IChatClient
 
             return response;
         }
+        catch (OperationCanceledException) when (backend.Kind != BackendKind.OnnxGenAiCpu)
+        {
+            _selected.MarkDegraded(
+                $"{backend.Kind} local inference was cancelled before completion.");
+            _monitor.RequestRecovery();
+            throw;
+        }
         catch (LocalInferenceException ex) when (!cancellationToken.IsCancellationRequested)
         {
             if (backend.Kind == BackendKind.OnnxGenAiCpu ||
@@ -84,6 +91,14 @@ public sealed class SelectedBackendChatClient : IChatClient
                 try
                 {
                     moved = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (
+                    backend.Kind != BackendKind.OnnxGenAiCpu)
+                {
+                    _selected.MarkDegraded(
+                        $"{backend.Kind} local streaming inference was cancelled before completion.");
+                    _monitor.RequestRecovery();
+                    throw;
                 }
                 catch (LocalInferenceException ex) when (
                     !emitted &&

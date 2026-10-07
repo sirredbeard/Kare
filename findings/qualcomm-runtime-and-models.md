@@ -101,6 +101,17 @@ Kare now uses a conservative recovery boundary:
 
 The current device configuration does not include an ONNX CPU model path. Until one is provisioned, Kare warns that no CPU fallback is configured and can use an existing cloud cascade route. It does not claim CPU inference happened.
 
+## Measured 2026-10-07, cancellation can poison the next mapping
+
+A tool-bearing request selected local inference before the local answer path had its own output limit. GenieX continued generating after the caller timed out at 120 seconds. The next deployment health inference timed out, and restarting GenieX then reproduced the 1.05 GiB `fastrpc_mmap` allocation failure. Only an operator reboot restored the NPU.
+
+This adds two requirements:
+
+- Local answers selected from a tool-bearing route use a separate 64-token maximum and disable thinking.
+- Kare owns the GenieX process lifecycle directly so request cancellation, graceful stop, forced stop, settling, restart, and readiness checks share one bounded state machine. Systemd remains a service host for Kare, not the FastRPC recovery controller.
+
+The device user unit had also used `Requires=kare-geniex.service`. Stopping GenieX therefore stopped Kare before Kare could warn the client or recover the sidecar. Kare-owned GenieX removes that dependency. An external GenieX unit remains only as a rollback path.
+
 ## Checked 2026-10-02, hunting for a Qwen2.5-Coder in ONNX Runtime GenAI format
 
 Searched the Hugging Face API rather than guessing repo names, because guessing wasted time earlier. A 404 on `huggingface.co` returns "Invalid username or password" when you curl it, which reads like an auth problem and is not.

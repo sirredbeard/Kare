@@ -14,6 +14,49 @@ namespace Kare.Tests;
 public sealed class LocalBackendHealthTests
 {
     [Fact]
+    public void DisabledOwnedProcessDoesNotRequireDevicePaths()
+    {
+        var result = new GenieXProcessOptionsValidator()
+            .Validate(null, new GenieXProcessOptions());
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void OwnedProcessRequiresValidatedFixedPathsAndCompute()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-geniex-options-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var executable = Path.Combine(directory, "geniex");
+        File.WriteAllText(executable, string.Empty);
+
+        try
+        {
+            var validator = new GenieXProcessOptionsValidator();
+            var options = new GenieXProcessOptions
+            {
+                Enabled = true,
+                ExecutablePath = executable,
+                WorkingDirectory = directory,
+                DataDirectory = directory,
+                Compute = "npu",
+            };
+
+            Assert.True(validator.Validate(null, options).Succeeded);
+
+            options.Compute = "npu; reboot";
+            Assert.False(validator.Validate(null, options).Succeeded);
+        }
+        finally
+        {
+            File.Delete(executable);
+            Directory.Delete(directory);
+        }
+    }
+
+    [Fact]
     public async Task FailedNpuRequestRetriesCpuAndWarnsOnce()
     {
         var primary = new FakeLocalBackend(
@@ -116,7 +159,7 @@ public sealed class LocalBackendHealthTests
     }
 
     [Fact]
-    public async Task CancellationDoesNotChangeBackendState()
+    public async Task CancellationMovesLocalWorkOffNpu()
     {
         using var source = new CancellationTokenSource();
         source.Cancel();
@@ -142,8 +185,8 @@ public sealed class LocalBackendHealthTests
                 [new ChatMessage(ChatRole.User, "status")],
                 cancellationToken: source.Token));
 
-        Assert.False(selected.IsDegraded);
-        Assert.Equal(BackendKind.GenieXQairt, selected.Kind);
+        Assert.True(selected.IsCpuFallback);
+        Assert.Equal(BackendKind.OnnxGenAiCpu, selected.Kind);
     }
 
     [Fact]
@@ -211,7 +254,6 @@ public sealed class LocalBackendHealthTests
             Options.Create(new LocalBackendHealthOptions
             {
                 ConsecutiveRecoverySuccesses = consecutiveSuccesses,
-                SystemdRecoveryEnabled = false,
             }),
             NullLogger<LocalBackendHealthMonitor>.Instance);
 

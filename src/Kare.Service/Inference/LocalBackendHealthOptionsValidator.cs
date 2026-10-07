@@ -28,19 +28,6 @@ public sealed class LocalBackendHealthOptionsValidator :
                 "Kare:Inference:Health:RecoveryAttemptCooldownSeconds must be between 60 and 86400.");
         }
 
-        if (options.StopSettleSeconds is < 1 or > 60 ||
-            options.StartSettleSeconds is < 1 or > 60)
-        {
-            return ValidateOptionsResult.Fail(
-                "Kare:Inference:Health settle intervals must be between 1 and 60 seconds.");
-        }
-
-        if (options.CommandTimeoutSeconds is < 1 or > 120)
-        {
-            return ValidateOptionsResult.Fail(
-                "Kare:Inference:Health:CommandTimeoutSeconds must be between 1 and 120.");
-        }
-
         return ValidateOptionsResult.Success;
     }
 }

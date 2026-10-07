@@ -96,11 +96,22 @@ builder.Services
 builder.Services.AddSingleton<
     IValidateOptions<LocalBackendHealthOptions>,
     LocalBackendHealthOptionsValidator>();
+builder.Services
+    .AddOptions<GenieXProcessOptions>()
+    .Bind(builder.Configuration.GetSection(GenieXProcessOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<
+    IValidateOptions<GenieXProcessOptions>,
+    GenieXProcessOptionsValidator>();
 
 builder.Services.AddSingleton<InferenceGate>();
 builder.Services.AddSingleton<MetricsRouteRecorder>();
 builder.Services.AddSingleton<SelectedBackend>();
-builder.Services.AddSingleton<ILocalBackendRecovery, SystemdGenieXRecovery>();
+builder.Services.AddSingleton<GenieXProcessManager>();
+builder.Services.AddSingleton<ILocalBackendRecovery>(
+    sp => sp.GetRequiredService<GenieXProcessManager>());
+builder.Services.AddSingleton<IHostedService>(
+    sp => sp.GetRequiredService<GenieXProcessManager>());
 builder.Services.AddSingleton<LocalBackendHealthMonitor>();
 builder.Services.AddSingleton<IHostedService>(
     sp => sp.GetRequiredService<LocalBackendHealthMonitor>());
@@ -195,6 +206,9 @@ app.MapOpenAiCompatibleApi();
 
 // Backend selection runs before the listener opens. Kare should fail to start rather than
 // accept a request it has no way to serve.
+await app.Services.GetRequiredService<GenieXProcessManager>()
+    .EnsureStartedAsync(app.Lifetime.ApplicationStopping);
+
 var selection = await app.Services.GetRequiredService<LocalBackendSelector>()
     .SelectAsync(app.Lifetime.ApplicationStopping);
 

@@ -15,17 +15,6 @@ public sealed class LocalBackendHealthOptions
     [Range(1, 10)]
     public int ConsecutiveRecoverySuccesses { get; set; } = 2;
 
-    public bool SystemdRecoveryEnabled { get; set; } = true;
-
     [Range(60, 86400)]
     public int RecoveryAttemptCooldownSeconds { get; set; } = 3600;
-
-    [Range(1, 60)]
-    public int StopSettleSeconds { get; set; } = 10;
-
-    [Range(1, 60)]
-    public int StartSettleSeconds { get; set; } = 10;
-
-    [Range(1, 120)]
-    public int CommandTimeoutSeconds { get; set; } = 30;
 }
