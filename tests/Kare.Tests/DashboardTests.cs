@@ -518,6 +518,47 @@ public sealed class DashboardTests
     }
 
     [Fact]
+    public async Task McpToolsAreProbedAndSelectedForMatchingRequests()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new McpToolResponseHandler());
+
+        try
+        {
+            var collector = new InMemoryMetricsCollector();
+            var service = new DashboardKnowledgeService(
+                collector,
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+
+            await service.AddMcpServerAsync(
+                new CreateDashboardMcpServerRequest("workspace-tools", "https://1.1.1.1/mcp"),
+                TestContext.Current.CancellationToken);
+            var enriched = await service.AddLocalContextAsync(
+                [new ChatMessage(ChatRole.User, "Inspect the repository files.")],
+                TestContext.Current.CancellationToken);
+
+            var server = Assert.Single(collector.GetMcpServers());
+            var tool = Assert.Single(server.Tools!, item => item.Name == "inspect_repository");
+            Assert.Equal("inspect_repository", tool.Name);
+            Assert.Equal(1, tool.Description.Length);
+            Assert.Contains("inspect_repository", enriched[0].Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task LocalContextMergesWithExistingLeadingSystemMessage()
     {
         var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));
@@ -651,6 +692,23 @@ public sealed class DashboardTests
             {
                 Content = new StringContent(content, Encoding.UTF8, mediaType),
             });
+    }
+
+    private sealed class McpToolResponseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var body = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult() ?? string.Empty;
+            var content = body.Contains("tools/list", StringComparison.Ordinal)
+                ? """{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"inspect_repository","description":"x","inputSchema":{"type":"object","properties":{"path":{"type":"string"}}}},{"name":"mutate_repository","description":"y","inputSchema":{"type":"object"}}]}}"""
+                : """{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}}}}""";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 
     private sealed class DelayedResponseHandler : HttpMessageHandler

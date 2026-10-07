@@ -13,4 +13,5 @@ namespace Kare.Service.Dashboard;
 [JsonSerializable(typeof(SourceContentSnapshot))]
 [JsonSerializable(typeof(RemoteSkillSnapshot))]
 [JsonSerializable(typeof(McpCapabilitySnapshot))]
+[JsonSerializable(typeof(McpToolSnapshot))]
 public sealed partial class DashboardJsonContext : JsonSerializerContext;

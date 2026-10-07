@@ -65,6 +65,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     private const int MaxSelectedSkills = 3;
     private const int MaxSelectedSources = 5;
     private const int MaxSelectedMcpServers = 5;
+    private const int MaxMcpToolsPerServer = 32;
+    private const int MaxMcpToolDescriptionCharacters = 512;
     private const int MaxStateBytes = 48 * 1024 * 1024;
     private const int StateBackupCount = 3;
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(15);
@@ -387,10 +389,28 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
         foreach (var server in selectedMcpServers)
         {
+            var relevantTools = (server.Tools ?? [])
+                .Select(tool => (
+                    Tool: tool,
+                    Score: ScoreText(
+                        requestTerms,
+                        $"{tool.Name} {tool.Description} {tool.InputSchema}")))
+                .Where(static item => item.Score > 0)
+                .OrderByDescending(static item => item.Score)
+                .ThenBy(static item => item.Tool.Name, StringComparer.Ordinal)
+                .Take(MaxMcpToolsPerServer)
+                .Select(static item => item.Tool)
+                .ToArray();
             AppendBounded(
                 mcpContext,
                 $"\nConnected MCP server: {server.Name}\n" +
-                $"Capabilities: {string.Join(", ", server.Capabilities)}\n",
+                $"Capabilities: {string.Join(", ", server.Capabilities)}\n" +
+                (relevantTools.Length == 0
+                    ? string.Empty
+                    : "Relevant tools:\n" + string.Join(
+                        "\n",
+                        relevantTools.Select(tool =>
+                            $"- {tool.Name}: {Trim(tool.Description, MaxMcpToolDescriptionCharacters)}"))),
                 McpContextBudget);
         }
 
@@ -814,6 +834,28 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 result.TryGetProperty("capabilities", out var capabilityElement)
                     ? capabilityElement.EnumerateObject().Select(static item => item.Name).ToArray()
                     : [];
+            var sessionId = response.Headers.TryGetValues("MCP-Session-Id", out var sessionIds)
+                ? sessionIds.FirstOrDefault()
+                : null;
+            IReadOnlyList<DashboardMetrics.McpToolInfo> tools = [];
+            try
+            {
+                tools = await ListMcpToolsAsync(
+                    server.Endpoint,
+                    sessionId,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                ex is HttpRequestException or IOException or JsonException or TaskCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "MCP tool metadata probe failed for server {ServerName}; retaining last-known tools.",
+                    server.Name);
+                tools = _collector.GetMcpServers()
+                    .FirstOrDefault(item => string.Equals(item.Name, server.Name, StringComparison.Ordinal))
+                    ?.Tools ?? [];
+            }
 
             var metric = new DashboardMetrics.McpServerInfo(
                 server.Name,
@@ -822,7 +864,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 Connected: true,
                 LastConnectedAt: now,
                 LastCheckedAt: now,
-                Error: null);
+                Error: null,
+                Tools: tools);
             RegisterMcpServer(metric);
             return metric;
         }
@@ -840,7 +883,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 Connected: false,
                 LastConnectedAt: previous?.LastConnectedAt,
                 LastCheckedAt: now,
-                ex.Message);
+                ex.Message,
+                previous?.Tools);
             RegisterMcpServer(metric);
             return metric;
         }
@@ -853,10 +897,90 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         _collector.RegisterMcpServer(metric);
         if (previous is null ||
             previous.Connected != metric.Connected ||
-            !previous.Capabilities.SequenceEqual(metric.Capabilities, StringComparer.Ordinal))
+            !previous.Capabilities.SequenceEqual(metric.Capabilities, StringComparer.Ordinal) ||
+            !ToolsEqual(previous.Tools, metric.Tools))
         {
             Interlocked.Increment(ref _contextVersion);
         }
+    }
+
+    private static bool ToolsEqual(
+        IReadOnlyList<DashboardMetrics.McpToolInfo>? left,
+        IReadOnlyList<DashboardMetrics.McpToolInfo>? right) =>
+        (left ?? []).SequenceEqual(
+            right ?? [],
+            EqualityComparer<DashboardMetrics.McpToolInfo>.Default);
+
+    private async Task<IReadOnlyList<DashboardMetrics.McpToolInfo>> ListMcpToolsAsync(
+        Uri endpoint,
+        string? sessionId,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = new StringContent(
+                """{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Accept.ParseAdd("text/event-stream");
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            request.Headers.TryAddWithoutValidation("MCP-Session-Id", sessionId);
+        }
+
+        using var response = await _httpClient
+            .SendAsync(request, cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var body = await ReadBoundedAsync(
+            response.Content,
+            MaxPageBytes,
+            cancellationToken).ConfigureAwait(false);
+        body = ExtractJsonRpcBody(
+            body,
+            response.Content.Headers.ContentType?.MediaType);
+        using var document = JsonDocument.Parse(body);
+        if (!document.RootElement.TryGetProperty("result", out var result) ||
+            !result.TryGetProperty("tools", out var toolsElement) ||
+            toolsElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return toolsElement
+            .EnumerateArray()
+            .Take(MaxMcpToolsPerServer)
+            .Select(tool => new DashboardMetrics.McpToolInfo(
+                tool.TryGetProperty("name", out var name)
+                    ? name.GetString() ?? string.Empty
+                    : string.Empty,
+                Trim(
+                    tool.TryGetProperty("description", out var description)
+                        ? description.GetString() ?? string.Empty
+                        : string.Empty,
+                    MaxMcpToolDescriptionCharacters),
+                tool.TryGetProperty("inputSchema", out var schema)
+                    ? Trim(schema.GetRawText(), MaxMcpToolDescriptionCharacters)
+                    : "{}"))
+            .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
+            .ToArray();
+    }
+
+    private static string ExtractJsonRpcBody(string body, string? mediaType)
+    {
+        if (!string.Equals(mediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
+        {
+            return body;
+        }
+
+        var dataLine = body
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(static line => line.StartsWith("data:", StringComparison.Ordinal));
+        return dataLine is null
+            ? throw new JsonException("MCP server returned no JSON data event.")
+            : dataLine["data:".Length..].Trim();
     }
 
     private async Task LoadAsync(CancellationToken cancellationToken)
@@ -967,11 +1091,16 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                     server.Endpoint.ToString(),
                     snapshot?.Capabilities.ToArray() ?? [],
                     Connected: false,
-                    snapshot?.LastConnectedAt,
+                    LastConnectedAt: snapshot?.LastConnectedAt,
                     LastCheckedAt: null,
                     Error: snapshot is null
                         ? "Not probed yet."
-                        : "Awaiting a fresh probe; showing last-known capabilities."));
+                        : "Awaiting a fresh probe; showing last-known capabilities.",
+                    Tools: snapshot?.Tools?.Select(static tool => new DashboardMetrics.McpToolInfo(
+                            tool.Name,
+                            tool.Description,
+                            tool.InputSchema))
+                        .ToArray()));
             }
         }
 
@@ -1017,7 +1146,13 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                             .Select(static item => new McpCapabilitySnapshot(
                                 item.Name,
                                 [.. item.Capabilities],
-                                item.LastConnectedAt)),
+                                item.LastConnectedAt,
+                                item.Tools?
+                                    .Select(static tool => new McpToolSnapshot(
+                                        tool.Name,
+                                        tool.Description,
+                                        tool.InputSchema))
+                                    .ToList())),
                     ]);
             }
 
@@ -1308,6 +1443,9 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         destination.Append(value.AsSpan(0, Math.Min(value.Length, remaining)));
     }
 
+    private static string Trim(string value, int maximum) =>
+        value.Length <= maximum ? value : value[..maximum];
+
     [GeneratedRegex("""href\s*=\s*["'](?<url>[^"'#]+)""", RegexOptions.IgnoreCase)]
     private static partial Regex LinkRegex();
 
@@ -1368,7 +1506,14 @@ public sealed record RemoteSkillSnapshot(
 public sealed record McpCapabilitySnapshot(
     string Name,
     List<string> Capabilities,
-    DateTime? LastConnectedAt);
+    DateTime? LastConnectedAt,
+    List<McpToolSnapshot>? Tools = null);
+
+/// <summary>Persisted bounded MCP tool metadata.</summary>
+public sealed record McpToolSnapshot(
+    string Name,
+    string Description,
+    string InputSchema);
 
 /// <summary>Persisted authoritative source registration.</summary>
 public sealed record SourceRegistration(

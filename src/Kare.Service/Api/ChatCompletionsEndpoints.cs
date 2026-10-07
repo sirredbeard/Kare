@@ -97,7 +97,11 @@ public static class ChatCompletionsEndpoints
             messages = OpenAiTranslator.ToChatMessages(request.Messages);
             responseModelId = modelId;
             chatOptions = OpenAiTranslator.ToChatOptions(request, modelId);
-            AddCacheFingerprints(chatOptions, knowledge, routePolicyOptions.Value);
+            AddCacheFingerprints(
+                chatOptions,
+                knowledge,
+                routePolicyOptions.Value,
+                context.Request.Headers);
         }
 
         catch (InvalidRequestException ex)
@@ -213,13 +217,32 @@ public static class ChatCompletionsEndpoints
     private static void AddCacheFingerprints(
         ChatOptions options,
         IDashboardKnowledgeService knowledge,
-        RoutePolicyOptions routePolicy)
+        RoutePolicyOptions routePolicy,
+        IHeaderDictionary headers)
     {
         options.AdditionalProperties ??= new();
         options.AdditionalProperties[ResponseCache.ContextFingerprintOptionName] =
             knowledge.ContextVersion;
         options.AdditionalProperties[ResponseCache.RoutePolicyVersionOptionName] =
             ComputeRoutePolicyFingerprint(routePolicy);
+        if (headers.TryGetValue("X-Kare-Repository-Fingerprint", out var values) &&
+            values.Count > 0)
+        {
+            var fingerprint = values[0];
+            if (string.IsNullOrWhiteSpace(fingerprint) ||
+                fingerprint.Length > 128 ||
+                fingerprint.Any(static character =>
+                    !(char.IsAsciiLetterOrDigit(character) ||
+                      character is '.' or '_' or ':' or '-')))
+            {
+                throw new InvalidRequestException(
+                    "X-Kare-Repository-Fingerprint must be a bounded repository revision identifier.",
+                    "invalid_repository_fingerprint");
+            }
+
+            options.AdditionalProperties[ResponseCache.RepositoryFingerprintOptionName] =
+                fingerprint;
+        }
     }
 
     private static string ComputeRoutePolicyFingerprint(RoutePolicyOptions options)
@@ -237,6 +260,9 @@ public static class ChatCompletionsEndpoints
             options.CascadeDecisionMaxOutputTokens,
             options.EnableCascadeResultJudge,
             options.CascadeJudgeMaxOutputTokens,
+            options.EnableCascadeCritique,
+            options.CascadeCritiqueMaxInputCharacters,
+            options.CascadeCritiqueMaxOutputTokens,
             options.ModeratePromptCharacterThreshold,
             options.ComplexPromptCharacterThreshold);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));

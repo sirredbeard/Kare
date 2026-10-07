@@ -127,6 +127,41 @@ public sealed class HydraFusionCascadeChatClientTests
     }
 
     [Fact]
+    public async Task CritiqueRevisesNonStreamingCloudDraftOnce()
+    {
+        var local = new ScriptedChatClient((_, _) =>
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "KARE_ESCALATE:fast")));
+        var cloud = new ScriptedCloudBackend
+        {
+            ResponseFactory = (messages, options) =>
+            {
+                var instructions = messages.FirstOrDefault()?.Text ?? string.Empty;
+                if (instructions.Contains("read-only critique", StringComparison.Ordinal))
+                {
+                    return new ChatResponse(
+                        new ChatMessage(ChatRole.Assistant, "KARE_CRITIQUE:REVISE:correct the answer"));
+                }
+
+                if (instructions.Contains("Revise the draft once", StringComparison.Ordinal))
+                {
+                    return new ChatResponse(new ChatMessage(ChatRole.Assistant, "revised answer"));
+                }
+
+                return new ChatResponse(new ChatMessage(ChatRole.Assistant, "initial answer"));
+            },
+        };
+        using var cache = CreateCache();
+        using var client = CreateClient(local, cloud, cache, enableCritique: true);
+
+        var response = await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Answer this request.")],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("revised answer", response.Text);
+        Assert.Equal(["fast", "no-tools", "fast"], cloud.ModelsCalled);
+    }
+
+    [Fact]
     public async Task CachedTargetSkipsRepeatedLocalGate()
     {
         var local = new ScriptedChatClient((_, _) =>
@@ -252,7 +287,8 @@ public sealed class HydraFusionCascadeChatClientTests
         ICloudInferenceBackend cloud,
         ResponseCache cache,
         CascadeRouteContext? routeContext = null,
-        bool enableResultJudge = false) =>
+        bool enableResultJudge = false,
+        bool enableCritique = false) =>
         new(
             local,
             cloud,
@@ -291,6 +327,7 @@ public sealed class HydraFusionCascadeChatClientTests
                 CascadeDecisionMaxInputCharacters = 2_000,
                 CascadeDecisionMaxOutputTokens = 64,
                 EnableCascadeResultJudge = enableResultJudge,
+                EnableCascadeCritique = enableCritique,
             }),
             BackendKind.GenieXQairt,
             "qwen",
@@ -360,6 +397,8 @@ public sealed class HydraFusionCascadeChatClientTests
 
         public ChatOptions? LastOptions { get; private set; }
 
+        public Func<IReadOnlyList<ChatMessage>, ChatOptions?, ChatResponse>? ResponseFactory { get; init; }
+
         public ValueTask<BackendProbeResult> ProbeAsync(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult(BackendProbeResult.Available("test"));
 
@@ -377,6 +416,7 @@ public sealed class HydraFusionCascadeChatClientTests
             }
 
             return Task.FromResult(
+                ResponseFactory?.Invoke(messages.ToArray(), options) ??
                 new ChatResponse(new ChatMessage(ChatRole.Assistant, $"cloud-{model}")));
         }
 

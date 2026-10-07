@@ -357,7 +357,14 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                     continue;
                 }
 
-                return response;
+                return await MaybeCritiqueAndReviseAsync(
+                        messages,
+                        options,
+                        response,
+                        candidate,
+                        candidates,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex) when (
                 ex is CloudInferenceException or NoBackendAvailableException or
@@ -371,6 +378,149 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
 
         throw lastError ?? new NoBackendAvailableException("No configured cloud cascade target is available.");
     }
+
+    private async Task<ChatResponse> MaybeCritiqueAndReviseAsync(
+            IReadOnlyList<ChatMessage> request,
+            ChatOptions? options,
+            ChatResponse draft,
+            CloudModelDescriptor drafter,
+            IReadOnlyList<CloudModelDescriptor> candidates,
+            CancellationToken cancellationToken)
+        {
+            if (!_options.EnableCascadeCritique ||
+                options?.Tools is { Count: > 0 } ||
+                draft.Messages.Any(message =>
+                    message.Contents.Any(content =>
+                        content is FunctionCallContent or FunctionResultContent)))
+            {
+                return draft;
+            }
+
+            var critic = candidates.FirstOrDefault(candidate =>
+                candidate.Provider != drafter.Provider &&
+                !string.Equals(candidate.Id, drafter.Id, StringComparison.Ordinal));
+            if (critic is null)
+            {
+                _logger.LogInformation(
+                    "Critique skipped for {Target}; no independent provider target is configured.",
+                    drafter.Id);
+                return draft;
+            }
+
+            var requestText = Limit(
+                GetLastUserText(request),
+                _options.CascadeCritiqueMaxInputCharacters);
+            var draftText = Limit(
+                GetText(draft),
+                _options.CascadeCritiqueMaxInputCharacters);
+            var criticMessages = new[]
+            {
+                new ChatMessage(
+                    ChatRole.System,
+                    """
+                    You are Kare's read-only critique model. Review the request and draft.
+                    Return only one compact result:
+                    KARE_CRITIQUE:ACCEPT
+                    or
+                    KARE_CRITIQUE:REVISE:<specific reason>
+                    Do not rewrite the answer, call tools, or propose a patch.
+                    """),
+                new ChatMessage(
+                    ChatRole.User,
+                    $"Request:\n{requestText}\n\nDraft from {drafter.ModelId}:\n{draftText}"),
+            };
+            var criticOptions = new ChatOptions
+            {
+                ModelId = critic.Id,
+                Temperature = 0,
+                MaxOutputTokens = _options.CascadeCritiqueMaxOutputTokens,
+                ToolMode = ChatToolMode.None,
+            };
+
+            ChatResponse critique;
+            try
+            {
+                critique = await CreateRecordingClient(
+                        _cloud,
+                        CloudDecision(
+                            critic,
+                            $"Read-only critique of draft from {drafter.Id}."))
+                    .GetResponseAsync(criticMessages, criticOptions, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (
+                ex is CloudInferenceException or NoBackendAvailableException or
+                    UnsupportedBackendCapabilityException)
+            {
+                _logger.LogWarning(ex, "Critique failed for cloud target {Target}.", drafter.Id);
+                _routeContext.Current = CloudDecision(
+                    drafter,
+                    $"Critique failed after draft from {drafter.Id}.");
+                return draft;
+            }
+
+            var critiqueText = GetText(critique).Trim();
+            if (critiqueText.StartsWith("KARE_CRITIQUE:ACCEPT", StringComparison.Ordinal))
+            {
+                _routeContext.Current = CloudDecision(
+                    drafter,
+                    $"Cloud draft accepted after critique from {critic.Id}.");
+                return draft;
+            }
+
+            if (!critiqueText.StartsWith("KARE_CRITIQUE:REVISE:", StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Critique returned an invalid verdict for cloud target {Target}.",
+                    drafter.Id);
+                _routeContext.Current = CloudDecision(
+                    drafter,
+                    $"Critique returned an invalid verdict for draft from {drafter.Id}.");
+                return draft;
+            }
+
+            var revisionMessages = new List<ChatMessage>
+            {
+                new(
+                    ChatRole.System,
+                    """
+                    Revise the draft once to complete the original request. Preserve correct work
+                    and address the critic's substantive feedback. Return only the revised answer.
+                    Do not mention this critique handoff and do not call tools.
+                    """),
+            };
+            revisionMessages.AddRange(request);
+            revisionMessages.Add(new ChatMessage(ChatRole.Assistant, draftText));
+            revisionMessages.Add(new ChatMessage(ChatRole.User, $"Critic feedback:\n{critiqueText}"));
+
+            try
+            {
+                var revised = await CreateRecordingClient(
+                        _cloud,
+                        CloudDecision(
+                            drafter,
+                            $"One revision after critique from {critic.Id}."))
+                    .GetResponseAsync(
+                        revisionMessages,
+                        CritiqueRevisionOptions(options, drafter),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                _routeContext.Current = CloudDecision(
+                    drafter,
+                    $"Cloud draft revised after critique from {critic.Id}.");
+                return revised;
+            }
+            catch (Exception ex) when (
+                ex is CloudInferenceException or NoBackendAvailableException or
+                    UnsupportedBackendCapabilityException)
+            {
+                _logger.LogWarning(ex, "Critique revision failed for cloud target {Target}.", drafter.Id);
+                _routeContext.Current = CloudDecision(
+                    drafter,
+                    $"Critique revision failed after draft from {drafter.Id}.");
+                return draft;
+            }
+        }
 
     private async Task<bool> ShouldAcceptDraftAsync(
         IReadOnlyList<ChatMessage> request,
@@ -647,6 +797,9 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             response.Messages.SelectMany(static message =>
                 message.Contents.OfType<TextContent>().Select(static content => content.Text)));
 
+    private static string Limit(string value, int maximum) =>
+        value.Length <= maximum ? value : value[..maximum];
+
     private static string? ParseTarget(
         string text,
         IReadOnlyList<CloudModelDescriptor> candidates)
@@ -719,6 +872,16 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             selected.ToolMode = ChatToolMode.None;
         }
 
+        return selected;
+    }
+
+    private static ChatOptions CritiqueRevisionOptions(
+        ChatOptions? options,
+        CloudModelDescriptor candidate)
+    {
+        var selected = CloudOptions(options, candidate);
+        selected.Tools = null;
+        selected.ToolMode = ChatToolMode.None;
         return selected;
     }
 

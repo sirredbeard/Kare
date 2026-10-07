@@ -127,7 +127,14 @@ public static class DashboardMetrics
         bool Connected,
         DateTime? LastConnectedAt,
         DateTime? LastCheckedAt,
-        string? Error);
+        string? Error,
+        IReadOnlyList<McpToolInfo>? Tools = null);
+
+    /// <summary>Bounded MCP tool metadata used for request-specific knowledge selection.</summary>
+    public record McpToolInfo(
+        string Name,
+        string Description,
+        string InputSchema);
 
     /// <summary>
     /// Complete point-in-time dashboard payload.
