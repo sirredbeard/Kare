@@ -107,6 +107,8 @@ WantedBy=default.target
 
 Keep `service.env` mode `600`. It may point `KARE_CONFIG_FILE` at the protected service JSON and set native runtime paths, but it must not contain values copied into issues, logs, or the repository.
 
+Do not make `kare.service` require `kare-geniex.service`. A hard `Requires=` dependency stops Kare when GenieX is stopped for recovery, which prevents Kare from warning the client or completing the recovery. Until Kare owns the GenieX process directly, use `Wants=kare-geniex.service` with `After=kare-geniex.service`.
+
 Enable the unit once:
 
 ```bash

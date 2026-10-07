@@ -259,6 +259,7 @@ public static class ChatCompletionsEndpoints
             options.CascadeDecisionMaxInputCharacters,
             options.CascadeDecisionMaxOutputTokens,
             options.CascadeToolDecisionMaxOutputTokens,
+            options.CascadeLocalAnswerMaxOutputTokens,
             options.EnableCascadeResultJudge,
             options.CascadeJudgeMaxOutputTokens,
             options.EnableCascadeCritique,

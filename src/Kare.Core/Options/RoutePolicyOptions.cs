@@ -55,6 +55,10 @@ public sealed class RoutePolicyOptions
     [Range(4, 64)]
     public int CascadeToolDecisionMaxOutputTokens { get; set; } = 8;
 
+    /// <summary>Maximum tokens generated after a tool-bearing request selects local inference.</summary>
+    [Range(16, 256)]
+    public int CascadeLocalAnswerMaxOutputTokens { get; set; } = 64;
+
     /// <summary>
     /// Runs a bounded local result judge after a non-streaming cloud draft. Disabled by default
     /// until task-class quality measurements justify the extra local call.

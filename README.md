@@ -87,7 +87,7 @@ The measured layout, retention rules, and current PCIe link investigation live i
 - An operations dashboard for routes, latency, cache metadata, skills, sources, and MCP status.
 - The cross-platform `copilot-kare` launcher.
 
-The first context problem is solved at the routing boundary. Copilot CLI can advertise a 32768-token routed context while Kare sends only bounded request text and selected authoritative context to the local Qwen gate. The local runtime still has to pass representative coding quality, sustained latency, and thermal checks.
+Copilot CLI can use its normal tools and repository instructions while Kare keeps local routing bounded. The local runtime still has to pass representative coding quality, sustained latency, and thermal checks.
 
 ## Build the server for the Arduino
 
@@ -111,14 +111,6 @@ The device publish path now fails before deployment when `kare-geniex.service`
 is not using the expected NPU compute target or cannot complete a bounded
 inference. Set `KARE_GENIEX_EXPECTED_COMPUTE` only when intentionally validating
 another compute target.
-
-Kare also probes the preferred accelerator while it is running. One failed
-health episode can trigger one graceful `kare-geniex.service` stop and start
-after a cleanup delay. Kare never reboots the device automatically. When a
-configured ONNX CPU backend is healthy, local requests move there until two
-NPU probes pass. Copilot chat receives one warning for the episode. Without a
-configured CPU model, Kare reports that fact and may use an existing cloud
-cascade route instead.
 
 The script creates a commit-specific release, switches the `current` symlink, restarts the user service, and waits for `/health`.
 
@@ -160,9 +152,7 @@ After the first healthy connection, the launcher remembers the last working addr
 
 `copilot-kare` opens the SSH tunnel, waits for Kare, supplies the Copilot BYOK environment, starts GitHub Copilot CLI, and cleans up the tunnel when Copilot exits.
 
-`copilot-kare` advertises 31744 prompt tokens and reserves 1024 output tokens. This gives Copilot CLI a 32768-token routed context for tools, repository instructions, and builtin MCP servers. Kare does not send that full wrapper to the local gate.
-
-A full test prompt completed through Kare in 43 seconds with 22.9k input tokens. Kare limits the local cascade decision to the last 1024 request characters and 32 output tokens. When caller tools are merely available, the gate uses an 8-token `local` or cloud-target decision. Tool continuations reuse the cached cloud target.
+The default launcher profile leaves room for Copilot tools, repository instructions, and builtin MCP servers while Kare keeps local work bounded. Measured context and routing details are in [`findings/copilot-cli-byok-device-test.md`](findings/copilot-cli-byok-device-test.md).
 
 Use `--kare-minimal-context` for the earlier offline diagnostic profile. It disables builtin MCP servers and repository instructions, exposes only `bash`, advertises 7936 prompt tokens, and reserves 256 output tokens.
 

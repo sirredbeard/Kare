@@ -39,7 +39,13 @@ OpenAI-compatible request
   -> route and usage record
 ```
 
-The main defect is context selection. `DashboardKnowledgeService` currently appends every enabled source, every enabled skill body, and every connected MCP server description until a shared 12,000-character limit is full. Registration order can decide what Qwen sees. Tool-bearing route decisions skip that content completely.
+Request-specific source, skill, and MCP metadata selection is now implemented, as are bounded tool-route decisions, cloud result judging, critique, and route-context cache identity. The immediate defects are operational and intake related:
+
+- FastRPC can degrade after long uptime and may require a bounded GenieX recycle.
+- The current recovery bridge still invokes the external user service. Kare should own the sidecar lifecycle directly.
+- Dashboard source, skill, and MCP intake still asks for normalized schema fields instead of interpreting the value the user actually has.
+- Dashboard workload counters are sampled after inference completes, so active requests can appear as zero during live work.
+- Model call accounting does not yet show published-price spend estimates or local avoided cost.
 
 The target path is:
 
@@ -59,12 +65,12 @@ request
 
 ### Workstream order
 
-1. **Baseline the current routes.** Build a representative task corpus and record always-local, light-cloud, and strong-cloud quality, latency, cache, and cost.
-2. **Land #4 as the context broker.** Normalize and hash source, skill, code, and MCP records. Add lexical and metadata retrieval, progressive skill disclosure, MCP descriptor caching, request-specific ranking, provenance, and separate context budgets.
-3. **Tighten cache identity.** Add repository revision, selected file hashes, source chunks, skill versions, MCP result hashes, model identity, route-policy version, and privacy class where each cache needs them.
-4. **Land #5 on top of selected context.** Keep the measured 1,024-character, 32-token route gate. Add deterministic result checks, a small judge packet, one stronger repair, bounded critique, sticky provider routing, and complete accounting.
-5. **Land #6 against the versioned records.** Stream state changes to Azure PostgreSQL, write six-hour manifests, retain 14 days of device restore points, and test both point-in-time recovery and a new-device clone.
-6. **Tune from measurements.** Set retrieval thresholds, top-k values, context shares, model priorities, and timeouts from the VENTUNO Q corpus. Do not copy unmeasured numbers into policy.
+1. **Finish NPU lifecycle ownership.** Keep the warning and bounded health state machine, then replace the temporary systemd command bridge with a Kare-owned GenieX process boundary. Do not reboot the device automatically.
+2. **Finish #4 as the context broker intake.** Keep the existing bounded registries and selection. Add one-field source, skill, and MCP intake, structured proposals, preview and approval, deterministic validation, provenance, refresh state, and protected persistence.
+3. **Fix live dashboard accounting.** Read queue and active inference state while requests are running. Add versioned published-price estimates, cloud-equivalent local savings, and explicit unknown-price behavior.
+4. **Tighten remaining cache identity.** Add source chunks, MCP result hashes, privacy class, intake-skill version, parser version, and accepted proposal hashes where each cache needs them.
+5. **Complete the measured #5 policy.** Keep the bounded route gate, result checks, judge, critique, sticky provider routing, and complete accounting. Add a representative corpus and tune from device measurements.
+6. **Land #6 against the versioned records.** Stream state changes to Azure PostgreSQL, write six-hour manifests, retain 14 days of device restore points, and test both point-in-time recovery and a new-device clone.
 
 ### Context broker rules
 

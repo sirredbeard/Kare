@@ -135,7 +135,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         {
             return await CompleteLocalAsync(
                 CreateBoundedLocalAnswerMessages(materialized),
-                options,
+                LocalAnswerOptions(options),
                 cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -250,7 +250,7 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
             {
                 await foreach (var update in StreamLocalAsync(
                     CreateBoundedLocalAnswerMessages(materialized),
-                    options,
+                    LocalAnswerOptions(options),
                     cancellationToken).ConfigureAwait(false))
                 {
                     yield return update;
@@ -941,6 +941,17 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         selected.ModelId = CurrentLocalModelId;
         selected.Tools = null;
         selected.ToolMode = ChatToolMode.None;
+        return selected;
+    }
+
+    private ChatOptions LocalAnswerOptions(ChatOptions? options)
+    {
+        var selected = LocalOptions(options);
+        selected.MaxOutputTokens = Math.Min(
+            selected.MaxOutputTokens ?? _options.CascadeLocalAnswerMaxOutputTokens,
+            _options.CascadeLocalAnswerMaxOutputTokens);
+        selected.AdditionalProperties ??= [];
+        selected.AdditionalProperties[GenieXBackend.DisableThinkingOptionName] = true;
         return selected;
     }
 

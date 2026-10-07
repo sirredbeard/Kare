@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Kare.Abstractions;
 using Kare.Core;
 using Kare.Core.Options;
+using Kare.Inference.GenieX;
 using Kare.Service.Cache;
 using Kare.Service.Dashboard;
 using Kare.Service.Options;
@@ -268,6 +269,12 @@ public sealed class HydraFusionCascadeChatClientTests
 
             Assert.Null(options?.Tools);
             Assert.Equal(ChatToolMode.None, options?.ToolMode);
+            Assert.Equal(64, options?.MaxOutputTokens);
+            Assert.True(
+                options?.AdditionalProperties?.TryGetValue(
+                    GenieXBackend.DisableThinkingOptionName,
+                    out var disableThinking) == true &&
+                disableThinking is true);
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, "The dashboard uses port 5285."));
         });
         var cloud = new ScriptedCloudBackend();
@@ -400,6 +407,7 @@ public sealed class HydraFusionCascadeChatClientTests
                 CascadeDecisionMaxInputCharacters = 2_000,
                 CascadeDecisionMaxOutputTokens = 64,
                 CascadeToolDecisionMaxOutputTokens = 8,
+                CascadeLocalAnswerMaxOutputTokens = 64,
                 EnableCascadeResultJudge = enableResultJudge,
                 EnableCascadeCritique = enableCritique,
             }),
