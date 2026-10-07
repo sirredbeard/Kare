@@ -224,19 +224,8 @@ public sealed class HydraFusionCascadeChatClientTests
     [Fact]
     public async Task ToolRequestUsesOnlyToolCapableCloudTargets()
     {
-        var local = new ScriptedChatClient((messages, options) =>
-        {
-            var instructions = messages[0].Text;
-            Assert.DoesNotContain("no-tools:", instructions, StringComparison.Ordinal);
-            Assert.Contains("strong:", instructions, StringComparison.Ordinal);
-            Assert.Contains("inspect_repository", instructions, StringComparison.Ordinal);
-            Assert.True(
-                options?.AdditionalProperties?.TryGetValue(
-                    ContextEnrichingChatClient.SkipKnowledgeContextOptionName,
-                    out var skip) == true &&
-                skip is false);
-            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "KARE_ANSWER:\nUnsafe local answer."));
-        });
+        var local = new ScriptedChatClient((_, _) =>
+            throw new InvalidOperationException("Repository work must skip the local answer gate."));
         var cloud = new ScriptedCloudBackend();
         using var cache = CreateCache();
         using var client = CreateClient(local, cloud, cache);
@@ -250,7 +239,37 @@ public sealed class HydraFusionCascadeChatClientTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(["fast"], cloud.ModelsCalled);
+        Assert.Equal(0, local.CallCount);
         Assert.NotNull(cloud.LastOptions?.Tools);
+    }
+
+    [Fact]
+    public async Task WorkspaceCreationRequestUsesCallerToolsWithoutLocalRefusal()
+    {
+        var local = new ScriptedChatClient((_, _) =>
+            throw new InvalidOperationException("Workspace actions must skip the local answer gate."));
+        var cloud = new ScriptedCloudBackend();
+        using var cache = CreateCache();
+        using var client = CreateClient(local, cloud, cache);
+
+        var response = await client.GetResponseAsync(
+            [new ChatMessage(
+                ChatRole.User,
+                "In this folder, initiate a .NET 11 public repository on GitHub and deploy it over SSH.")],
+            new ChatOptions
+            {
+                Tools =
+                [
+                    AIFunctionFactory.Create(() => "ok", "bash"),
+                    AIFunctionFactory.Create(() => "ok", "writingstyle"),
+                ],
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("cloud-fast", response.Text);
+        Assert.Equal(0, local.CallCount);
+        Assert.Equal(["fast"], cloud.ModelsCalled);
+        Assert.Equal(2, cloud.LastOptions?.Tools?.Count);
     }
 
     [Fact]

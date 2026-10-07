@@ -416,18 +416,23 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
             EnableHostGitOperations = false,
             SkipCustomInstructions = true,
             EnableConfigDiscovery = false,
-            SessionLimits = new SessionLimitsConfig
-            {
-                MaxAiCredits = _options.MaxAiCreditsPerRequest,
-            },
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
                 Content =
-                    "You are the cloud escalation backend for Kare. Use only the external tools offered by the caller. " +
-                    "Do not claim a tool ran unless you requested it. Return a concise answer or request the required caller tool.",
+                    "You are the cloud escalation backend for Kare. The caller owns the working directory and every external tool offered in this session. " +
+                    "Use those tools when the request requires repository, GitHub, MCP, shell, SSH, or device access. " +
+                    "Do not claim a tool is unavailable when it is offered, and do not claim it ran unless you requested it. " +
+                    "Return a concise answer or request the required caller tool.",
             },
         };
+        if (_options.MaxAiCreditsPerRequest is { } maxAiCredits)
+        {
+            config.SessionLimits = new SessionLimitsConfig
+            {
+                MaxAiCredits = maxAiCredits,
+            };
+        }
 
         if (route.Provider == CloudModelProvider.GitHubCopilot &&
             string.Equals(route.ModelId, "auto", StringComparison.Ordinal))

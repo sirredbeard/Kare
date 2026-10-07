@@ -31,6 +31,7 @@ public sealed class ResponseCache : IDisposable
     private readonly IDashboardMetricsCollector? _dashboard;
     private readonly IDashboardKnowledgeService? _knowledge;
     private readonly ILogger<ResponseCache>? _logger;
+    private readonly CascadeRouteContext? _routeContext;
     private readonly Lock _keysSync = new();
     private readonly HashSet<string> _keys = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PersistentCacheEntry> _persistentEntries =
@@ -41,13 +42,15 @@ public sealed class ResponseCache : IDisposable
         IOptions<ResponseCacheOptions> options,
         IDashboardMetricsCollector? dashboard = null,
         IDashboardKnowledgeService? knowledge = null,
-        ILogger<ResponseCache>? logger = null)
+        ILogger<ResponseCache>? logger = null,
+        CascadeRouteContext? routeContext = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value;
         _dashboard = dashboard;
         _knowledge = knowledge;
         _logger = logger;
+        _routeContext = routeContext;
         _cache = new MemoryCache(new MemoryCacheOptions
         {
             SizeLimit = _options.MaxEntries,
@@ -74,15 +77,13 @@ public sealed class ResponseCache : IDisposable
             return false;
         }
 
+        var entry = GetPersistentEntry(key);
         var descriptor = BuildDescriptor(messages, response);
-        _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
-            key,
+        _dashboard?.RecordCacheEntry(BuildDashboardEntry(
+            entry,
+            descriptor,
             DateTime.UtcNow,
-            DateTime.UtcNow,
-            CountBytes(response!),
-            "application/json",
-            Keywords: descriptor.Keywords,
-            TaskClass: descriptor.TaskClass));
+            CountBytes(response!)));
         return true;
     }
 
@@ -105,6 +106,23 @@ public sealed class ResponseCache : IDisposable
 
         var now = DateTime.UtcNow;
         var expiresAt = now.AddSeconds(_options.EntryLifetimeSeconds);
+        var descriptor = BuildDescriptor(messages, response);
+        var route = _routeContext?.Current;
+        var entry = new PersistentCacheEntry(
+            key,
+            ResponseKind,
+            response.Text,
+            Target: null,
+            now,
+            expiresAt,
+            response.Usage?.InputTokenCount,
+            response.Usage?.OutputTokenCount,
+            response.Usage?.TotalTokenCount,
+            options.ModelId,
+            route?.Route.ToString(),
+            route?.Backend.ToString(),
+            [.. descriptor.Keywords],
+            descriptor.TaskClass);
         _cache.Set(
             key,
             response,
@@ -117,28 +135,15 @@ public sealed class ResponseCache : IDisposable
         lock (_keysSync)
         {
             _keys.Add(key);
-            _persistentEntries[key] = new PersistentCacheEntry(
-                key,
-                ResponseKind,
-                response.Text,
-                Target: null,
-                now,
-                expiresAt,
-                response.Usage?.InputTokenCount,
-                response.Usage?.OutputTokenCount,
-                response.Usage?.TotalTokenCount);
+            _persistentEntries[key] = entry;
             PersistLocked();
         }
 
-        var descriptor = BuildDescriptor(messages, response);
-        _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
-            key,
-            DateTime.UtcNow,
+        _dashboard?.RecordCacheEntry(BuildDashboardEntry(
+            entry,
+            descriptor,
             LastAccessedAt: null,
-            CountBytes(response),
-            "application/json",
-            Keywords: descriptor.Keywords,
-            TaskClass: descriptor.TaskClass));
+            CountBytes(response)));
     }
 
     /// <summary>Gets a cached cloud target selected by the local cascade gate.</summary>
@@ -162,15 +167,13 @@ public sealed class ResponseCache : IDisposable
         }
 
         target = cachedTarget;
+        var entry = GetPersistentEntry(key);
         var descriptor = BuildDescriptor(decisionMessages, response: null);
-        _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
-            key,
+        _dashboard?.RecordCacheEntry(BuildDashboardEntry(
+            entry,
+            descriptor,
             DateTime.UtcNow,
-            DateTime.UtcNow,
-            Encoding.UTF8.GetByteCount(cachedTarget),
-            "application/vnd.kare.cascade-route",
-            Keywords: descriptor.Keywords,
-            TaskClass: descriptor.TaskClass));
+            Encoding.UTF8.GetByteCount(cachedTarget)));
         return true;
     }
 
@@ -189,6 +192,22 @@ public sealed class ResponseCache : IDisposable
 
         var now = DateTime.UtcNow;
         var expiresAt = now.AddSeconds(_options.EntryLifetimeSeconds);
+        var descriptor = BuildDescriptor(decisionMessages, response: null);
+        var entry = new PersistentCacheEntry(
+            key,
+            CascadeKind,
+            Text: null,
+            target,
+            now,
+            expiresAt,
+            InputTokens: null,
+            OutputTokens: null,
+            TotalTokens: null,
+            ModelId: null,
+            Route: null,
+            Backend: null,
+            [.. descriptor.Keywords],
+            descriptor.TaskClass);
         _cache.Set(
             key,
             target,
@@ -201,28 +220,15 @@ public sealed class ResponseCache : IDisposable
         lock (_keysSync)
         {
             _keys.Add(key);
-            _persistentEntries[key] = new PersistentCacheEntry(
-                key,
-                CascadeKind,
-                Text: null,
-                target,
-                now,
-                expiresAt,
-                InputTokens: null,
-                OutputTokens: null,
-                TotalTokens: null);
+            _persistentEntries[key] = entry;
             PersistLocked();
         }
 
-        var descriptor = BuildDescriptor(decisionMessages, response: null);
-        _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
-            key,
-            DateTime.UtcNow,
+        _dashboard?.RecordCacheEntry(BuildDashboardEntry(
+            entry,
+            descriptor,
             LastAccessedAt: null,
-            Encoding.UTF8.GetByteCount(target),
-            "application/vnd.kare.cascade-route",
-            Keywords: descriptor.Keywords,
-            TaskClass: descriptor.TaskClass));
+            Encoding.UTF8.GetByteCount(target)));
     }
 
     /// <summary>Removes a cached response by its opaque hash key.</summary>
@@ -358,19 +364,16 @@ public sealed class ResponseCache : IDisposable
                 });
             _keys.Add(entry.Key);
             _persistentEntries[entry.Key] = entry;
-            var classified = ContentClassifier.Classify(entry.Text ?? entry.Target ?? string.Empty);
-            _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
-                entry.Key,
-                entry.CreatedAt,
+            var classified = entry.Keywords is { Count: > 0 }
+                ? ((IReadOnlyList<string>)entry.Keywords, entry.TaskClass)
+                : ContentClassifier.Classify(entry.Text ?? entry.Target ?? string.Empty);
+            _dashboard?.RecordCacheEntry(BuildDashboardEntry(
+                entry,
+                classified,
                 LastAccessedAt: null,
                 entry.Text is null
                     ? Encoding.UTF8.GetByteCount(entry.Target!)
-                    : Encoding.UTF8.GetByteCount(entry.Text),
-                entry.Kind == CascadeKind
-                    ? "application/vnd.kare.cascade-route"
-                    : "application/json",
-                Keywords: classified.Keywords,
-                TaskClass: classified.TaskClass));
+                    : Encoding.UTF8.GetByteCount(entry.Text)));
         }
 
         PersistLocked();
@@ -394,6 +397,80 @@ public sealed class ResponseCache : IDisposable
             ? requestText
             : requestText + "\n" + response.Text;
         return ContentClassifier.Classify(combined);
+    }
+
+    private PersistentCacheEntry GetPersistentEntry(string key)
+    {
+        lock (_keysSync)
+        {
+            return _persistentEntries.TryGetValue(key, out var entry)
+                ? entry
+                : new PersistentCacheEntry(
+                    key,
+                    ResponseKind,
+                    Text: null,
+                    Target: null,
+                    DateTime.UtcNow,
+                    DateTime.UtcNow.AddSeconds(_options.EntryLifetimeSeconds),
+                    InputTokens: null,
+                    OutputTokens: null,
+                    TotalTokens: null);
+        }
+    }
+
+    private static DashboardMetrics.CacheEntry BuildDashboardEntry(
+        PersistentCacheEntry entry,
+        (IReadOnlyList<string> Keywords, string? TaskClass) descriptor,
+        DateTime? LastAccessedAt,
+        long sizeBytes)
+    {
+        var isRoute = entry.Kind == CascadeKind;
+        var kind = isRoute ? "route" : "response";
+        var subject = descriptor.Keywords
+            .Where(keyword => !string.Equals(keyword, descriptor.TaskClass, StringComparison.Ordinal))
+            .FirstOrDefault();
+        var labels = new[] { descriptor.TaskClass, subject }
+            .Where(static label => !string.IsNullOrWhiteSpace(label))
+            .Select(static label => char.ToUpperInvariant(label![0]) + label[1..])
+            .ToArray();
+        var name = labels.Length == 0
+            ? isRoute ? "Cloud route decision" : "Cached response"
+            : $"{string.Join(' ', labels)} {(isRoute ? "route" : "response")}";
+        var summary = isRoute
+            ? "A provider route selected for a matching request. Prompt text is not stored."
+            : "A deterministic cached answer. Prompt and generated text are hidden from the dashboard.";
+        var reuseKeywords = descriptor.TaskClass is null
+            ? descriptor.Keywords
+            :
+            [
+                descriptor.TaskClass,
+                .. descriptor.Keywords.Where(keyword =>
+                    !string.Equals(keyword, descriptor.TaskClass, StringComparison.Ordinal)),
+            ];
+        var reuseHint = reuseKeywords.Count == 0
+            ? "Reusable only when the complete request, policy, model, and context fingerprints match."
+            : $"Describes {string.Join(", ", reuseKeywords)} work. The current cache still requires the same deterministic request and matching policy, model, and context fingerprints.";
+
+        return new DashboardMetrics.CacheEntry(
+            entry.Key,
+            entry.CreatedAt,
+            LastAccessedAt,
+            sizeBytes,
+            isRoute ? "application/vnd.kare.cascade-route" : "application/json",
+            descriptor.Keywords,
+            descriptor.TaskClass,
+            name,
+            kind,
+            entry.ExpiresAt,
+            entry.ModelId,
+            entry.Route,
+            entry.Backend,
+            entry.Target,
+            entry.InputTokens,
+            entry.OutputTokens,
+            entry.TotalTokens,
+            summary,
+            reuseHint);
     }
 
     private void RemoveMissingEntry(string key)

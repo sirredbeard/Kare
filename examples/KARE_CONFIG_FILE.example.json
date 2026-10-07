@@ -24,7 +24,6 @@
         "GitHubTokenEnvironmentVariable": "KARE_COPILOT_GITHUB_TOKEN",
         "CredentialTimeoutSeconds": 30,
         "TimeoutSeconds": 180,
-        "MaxAiCreditsPerRequest": 30,
         "StateDirectory": "/var/lib/kare/copilot",
         "Models": [
           {

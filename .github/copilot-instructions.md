@@ -229,7 +229,9 @@ The dashboard may show:
 
 - Recent route decisions, model IDs, backends, fallback state, success, billable state, latency, token counts, and decode rate.
 - Queue depth, active local inference, completed requests, and average first-token latency.
-- Bounded cache hashes, timestamps, size, and delete controls.
+- Privacy-safe cache names, opaque hashes as supporting metadata, timestamps, expiry,
+  route/backend/model metadata when available, fixed-vocabulary keywords, exact-match reuse
+  rules, and delete controls.
 - Configured local, GitHub Copilot, and other external model endpoints.
 - Authoritative HTTPS source patterns and refresh status.
 - Skills loaded from explicit device paths or public HTTPS URLs.

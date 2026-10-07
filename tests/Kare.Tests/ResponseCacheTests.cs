@@ -101,8 +101,65 @@ public sealed class ResponseCacheTests
         Assert.Contains("debug", entry.Keywords!);
         Assert.Contains("go", entry.Keywords!);
         Assert.Equal("debug", entry.TaskClass);
+        Assert.Equal("Debug Go response", entry.Name);
+        Assert.Equal("response", entry.Kind);
+        Assert.Equal("kare-local", entry.ModelId);
+        Assert.Null(entry.Route);
+        Assert.Null(entry.Backend);
+        Assert.NotNull(entry.ExpiresAt);
+        Assert.Contains("Prompt and generated text are hidden", entry.Summary);
+        Assert.Contains("Describes debug, go", entry.ReuseHint);
+        Assert.Contains("same deterministic request", entry.ReuseHint);
         Assert.DoesNotContain(entry.Keywords!, keyword => keyword.Contains("secret", StringComparison.Ordinal));
         Assert.DoesNotContain(entry.Keywords!, keyword => keyword.Contains("prod-secret-service", StringComparison.Ordinal));
+        Assert.DoesNotContain("prod-secret-service", entry.Name, StringComparison.Ordinal);
+        Assert.DoesNotContain("prod-secret-service", entry.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("prod-secret-service", entry.ReuseHint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RouteCacheHasInspectablePrivacySafeMetadata()
+    {
+        var dashboard = new InMemoryMetricsCollector();
+        using var cache = CreateCache(dashboard);
+        var messages = new[] { new ChatMessage(ChatRole.User, "Deploy this dotnet service.") };
+
+        cache.SetCascadeTarget(messages, options: null, CreateCandidates(), "fast");
+
+        var entry = Assert.Single(dashboard.GetCacheEntries());
+        Assert.Equal("Deploy Dotnet route", entry.Name);
+        Assert.Equal("route", entry.Kind);
+        Assert.Equal("fast", entry.RouteTarget);
+        Assert.Contains("Prompt text is not stored", entry.Summary);
+        Assert.Null(entry.ModelId);
+    }
+
+    [Fact]
+    public void ResponseCacheRecordsAvailableRouteAndBackendMetadata()
+    {
+        var dashboard = new InMemoryMetricsCollector();
+        var routeContext = new CascadeRouteContext
+        {
+            Current = new RouteDecision(
+                KareRoute.CopilotLight,
+                "test",
+                "model",
+                BackendKind.Remote,
+                IsBillable: true,
+                ProviderRouteId: "fast"),
+        };
+        using var cache = CreateCache(dashboard, routeContext: routeContext);
+        var options = new ChatOptions { ModelId = "kare", Temperature = 0 };
+
+        cache.Set(
+            [new ChatMessage(ChatRole.User, "Review this dotnet service.")],
+            options,
+            streaming: false,
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "cached")));
+
+        var entry = Assert.Single(dashboard.GetCacheEntries());
+        Assert.Equal("CopilotLight", entry.Route);
+        Assert.Equal("Remote", entry.Backend);
     }
 
     [Fact]
@@ -207,9 +264,14 @@ public sealed class ResponseCacheTests
                     new ChatResponse(new ChatMessage(ChatRole.Assistant, "cached")));
             }
 
-            using var second = CreatePersistentCache(path);
+            var dashboard = new InMemoryMetricsCollector();
+            using var second = CreatePersistentCache(path, dashboard);
             Assert.True(second.TryGet(messages, options, streaming: false, out var response));
             Assert.Equal("cached", response!.Text);
+            var entry = Assert.Single(dashboard.GetCacheEntries());
+            Assert.Equal("Cached response", entry.Name);
+            Assert.Equal("kare-local", entry.ModelId);
+            Assert.NotNull(entry.ExpiresAt);
             if (!OperatingSystem.IsWindows())
             {
                 Assert.Equal(
@@ -316,15 +378,18 @@ public sealed class ResponseCacheTests
 
     private static ResponseCache CreateCache(
         IDashboardMetricsCollector? dashboard = null,
-        IDashboardKnowledgeService? knowledge = null) =>
+        IDashboardKnowledgeService? knowledge = null,
+        CascadeRouteContext? routeContext = null) =>
         new(Options.Create(new ResponseCacheOptions
         {
             Enabled = true,
             MaxEntries = 8,
             EntryLifetimeSeconds = 60,
-        }), dashboard, knowledge);
+        }), dashboard, knowledge, logger: null, routeContext: routeContext);
 
-    private static ResponseCache CreatePersistentCache(string path) =>
+    private static ResponseCache CreatePersistentCache(
+        string path,
+        IDashboardMetricsCollector? dashboard = null) =>
         new(Options.Create(new ResponseCacheOptions
         {
             Enabled = true,
@@ -334,7 +399,7 @@ public sealed class ResponseCacheTests
             PersistencePath = path,
             MaxPersistentBytes = 1024 * 1024,
             BackupCount = 2,
-        }));
+        }), dashboard);
 
     private static CloudModelDescriptor[] CreateCandidates() =>
     [

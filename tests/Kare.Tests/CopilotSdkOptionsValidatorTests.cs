@@ -8,6 +8,12 @@ public sealed class CopilotSdkOptionsValidatorTests
     private readonly CopilotSdkOptionsValidator _validator = new();
 
     [Fact]
+    public void DefaultConfigurationDoesNotAddAiCreditCeiling()
+    {
+        Assert.Null(new CopilotSdkOptions().MaxAiCreditsPerRequest);
+    }
+
+    [Fact]
     public void DisabledConfigurationNeedsNoCredentialsOrEndpoint()
     {
         var result = _validator.Validate(null, new CopilotSdkOptions { Enabled = false });

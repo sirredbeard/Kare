@@ -355,9 +355,22 @@ public static class DashboardEndpoints
             .delete { padding: 4px 7px; color: var(--red); }
             .danger { color: var(--red); }
             .approve { color: var(--green); }
+            .link-button { border: 0; background: transparent; color: var(--blue); padding: 0; text-align: left; }
             .preview { color: var(--muted); font-size: 12px; }
             .actions { display: flex; gap: 6px; flex-wrap: wrap; }
             .actions button { padding: 3px 7px; font-size: 12px; }
+            dialog {
+              width: min(720px, calc(100% - 32px));
+              border: 1px solid var(--line);
+              border-radius: 10px;
+              background: var(--panel);
+              color: var(--text);
+              padding: 18px;
+            }
+            dialog::backdrop { background: rgb(0 0 0 / 65%); }
+            .detail-grid { display: grid; grid-template-columns: 160px 1fr; gap: 8px 14px; }
+            .detail-grid dt { color: var(--muted); }
+            .detail-grid dd { margin: 0; overflow-wrap: anywhere; }
             footer { padding: 18px 0 32px; color: var(--muted); }
             @media (max-width: 900px) {
               .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -431,7 +444,7 @@ public static class DashboardEndpoints
                   <button id="clear-cache" class="danger" type="button">Delete all</button>
                 </div>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Key</th><th>Created</th><th>Last used</th><th>Size</th><th>Keywords</th><th>Task</th><th></th></tr></thead>
+                  <thead><tr><th>Name</th><th>Type</th><th>Created</th><th>Last used</th><th>Expires</th><th>Size</th><th>Keywords</th><th></th></tr></thead>
                   <tbody id="cache"></tbody>
                 </table></div>
               </article>
@@ -486,6 +499,13 @@ public static class DashboardEndpoints
             </section>
             <footer id="generated">No data loaded.</footer>
           </main>
+          <dialog id="cache-detail">
+            <div class="section-head">
+              <h2 id="cache-detail-title">Cache entry</h2>
+              <button id="close-cache-detail" type="button">Close</button>
+            </div>
+            <dl id="cache-detail-body" class="detail-grid"></dl>
+          </dialog>
           <script>
             const escapeHtml = value => String(value ?? '')
               .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
@@ -543,6 +563,8 @@ public static class DashboardEndpoints
               }
               return hash;
             }
+
+            let cacheEntriesByKey = new Map();
 
             function render(snapshot) {
               const requests = snapshot.requests || [];
@@ -609,13 +631,15 @@ public static class DashboardEndpoints
                 <td class="${item.status === 'succeeded' ? 'good' : 'bad'}">${escapeHtml(item.status)}</td></tr>`).join('') : empty(4);
 
               const cache = snapshot.cacheEntries || [];
+              cacheEntriesByKey = new Map(cache.map(item => [item.key, item]));
               document.querySelector('#cache').innerHTML = cache.length ? cache.map(item => `
-                <tr><td title="${escapeHtml(item.key)}">${escapeHtml(item.key.slice(0, 12))}...</td>
+                <tr><td><button class="link-button" data-cache-detail="${escapeHtml(item.key)}">${escapeHtml(item.name || 'Cached entry')}</button></td>
+                <td>${escapeHtml(item.kind || 'response')}</td>
                 <td>${escapeHtml(time(item.createdAt))}</td><td>${escapeHtml(time(item.lastAccessedAt))}</td>
+                <td>${escapeHtml(time(item.expiresAt))}</td>
                 <td>${escapeHtml(item.sizeBytes)} B</td>
                 <td>${escapeHtml((item.keywords || []).join(', '))}</td>
-                <td>${escapeHtml(item.taskClass ?? '')}</td>
-                <td><button class="delete" data-cache-key="${escapeHtml(item.key)}">Delete</button></td></tr>`).join('') : empty(7);
+                <td><button class="delete" data-cache-key="${escapeHtml(item.key)}">Delete</button></td></tr>`).join('') : empty(8);
 
               const routes = snapshot.routingDecisionUrls || [];
               document.querySelector('#routes').innerHTML = routes.length ? routes.map(item => `
@@ -713,6 +737,11 @@ public static class DashboardEndpoints
 
             document.querySelector('#refresh').addEventListener('click', refresh);
             document.querySelector('#cache').addEventListener('click', async event => {
+              const detailKey = event.target.dataset.cacheDetail;
+              if (detailKey) {
+                showCacheDetail(cacheEntriesByKey.get(detailKey));
+                return;
+              }
               const key = event.target.dataset.cacheKey;
               if (!key) return;
               const response = await fetch(`/dashboard/api/cache/${encodeURIComponent(key)}`, {
@@ -720,6 +749,8 @@ public static class DashboardEndpoints
               });
               if (response.ok) refresh();
             });
+            document.querySelector('#close-cache-detail').addEventListener('click', () =>
+              document.querySelector('#cache-detail').close());
             document.querySelector('#clear-cache').addEventListener('click', async () => {
               if (!confirm('Delete every cached response?')) return;
               const response = await fetch('/dashboard/api/cache', { method: 'DELETE' });
@@ -798,6 +829,39 @@ public static class DashboardEndpoints
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(value)
               });
+            }
+
+            function showCacheDetail(entry) {
+              if (!entry) return;
+              const status = entry.expiresAt && new Date(entry.expiresAt) <= new Date()
+                ? 'expired'
+                : 'active';
+              const values = [
+                ['Type', entry.kind || 'response'],
+                ['Status', status],
+                ['Opaque key', entry.key],
+                ['Created', time(entry.createdAt)],
+                ['Last used', time(entry.lastAccessedAt)],
+                ['Expires', time(entry.expiresAt)],
+                ['Size', `${entry.sizeBytes} B`],
+                ['Content type', entry.contentType],
+                ['Model', entry.modelId || 'n/a'],
+                ['Route', entry.route || 'n/a'],
+                ['Backend', entry.backend || 'n/a'],
+                ['Route target', entry.routeTarget || 'n/a'],
+                ['Tokens', entry.totalTokens == null
+                  ? 'n/a'
+                  : `${entry.totalTokens} total (${entry.inputTokens ?? 'n/a'} in, ${entry.outputTokens ?? 'n/a'} out)`],
+                ['Task', entry.taskClass || 'n/a'],
+                ['Keywords', (entry.keywords || []).join(', ') || 'n/a'],
+                ['Summary', entry.summary || 'No privacy-safe summary is available.'],
+                ['Could match again', entry.reuseHint || 'Only an exact policy-safe fingerprint can reuse this entry.']
+              ];
+              document.querySelector('#cache-detail-title').textContent = entry.name || 'Cache entry';
+              document.querySelector('#cache-detail-body').innerHTML = values
+                .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`)
+                .join('');
+              document.querySelector('#cache-detail').showModal();
             }
 
             refresh();

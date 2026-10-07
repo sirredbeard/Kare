@@ -83,7 +83,19 @@ public static class DashboardMetrics
         long SizeBytes,
         string ContentType,
         IReadOnlyList<string>? Keywords = null,
-        string? TaskClass = null);
+        string? TaskClass = null,
+        string? Name = null,
+        string? Kind = null,
+        DateTime? ExpiresAt = null,
+        string? ModelId = null,
+        string? Route = null,
+        string? Backend = null,
+        string? RouteTarget = null,
+        long? InputTokens = null,
+        long? OutputTokens = null,
+        long? TotalTokens = null,
+        string? Summary = null,
+        string? ReuseHint = null);
 
     /// <summary>
     /// SLM workload snapshot.

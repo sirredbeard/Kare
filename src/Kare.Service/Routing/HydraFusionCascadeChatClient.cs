@@ -102,6 +102,16 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 "Image content requires an explicitly image-capable cloud model.",
                 cancellationToken).ConfigureAwait(false);
         }
+        if (RequiresCallerEnvironment(materialized, options))
+        {
+            return await CompleteCloudCascadeAsync(
+                materialized,
+                options,
+                candidates,
+                candidates[0].Id,
+                "The request requires caller-owned repository, GitHub, SSH, device, or workspace tools.",
+                cancellationToken).ConfigureAwait(false);
+        }
 
         var decisionMessages = CreateDecisionMessages(materialized, options, candidates);
         if (_cache.TryGetCascadeTarget(decisionMessages, options, candidates, out var cachedTarget))
@@ -204,6 +214,21 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 candidates,
                 candidates[0].Id,
                 "Image content requires an explicitly image-capable cloud model.",
+                cancellationToken).ConfigureAwait(false))
+            {
+                yield return update;
+            }
+
+            yield break;
+        }
+        if (RequiresCallerEnvironment(materialized, options))
+        {
+            await foreach (var update in StreamCloudCascadeAsync(
+                materialized,
+                options,
+                candidates,
+                candidates[0].Id,
+                "The request requires caller-owned repository, GitHub, SSH, device, or workspace tools.",
                 cancellationToken).ConfigureAwait(false))
             {
                 yield return update;
@@ -753,6 +778,44 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         messages.Any(static message =>
             message.Contents.OfType<DataContent>()
                 .Any(static content => content.HasTopLevelMediaType("image")));
+
+    private static bool RequiresCallerEnvironment(
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options)
+    {
+        if (options?.Tools is not { Count: > 0 })
+        {
+            return false;
+        }
+
+        var request = GetLastUserText(messages).Trim().ToLowerInvariant();
+        string[] environmentAnchors =
+        [
+            "this repository",
+            "this repo",
+            "this folder",
+            "working directory",
+            "codebase",
+            "repository",
+            "github",
+            "git ",
+            " gh ",
+            "ssh",
+            "device",
+        ];
+        if (environmentAnchors.Any(request.Contains))
+        {
+            return true;
+        }
+
+        var firstWord = request
+            .Split([' ', '\t', '\r', '\n', ',', ':'], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+        return firstWord is
+            "address" or "build" or "commit" or "configure" or "create" or "deploy" or
+            "edit" or "fix" or "implement" or "initiate" or "inspect" or "install" or "merge" or
+            "modify" or "push" or "review" or "run" or "test" or "write";
+    }
 
     private IReadOnlyList<ChatMessage> CreateDecisionMessages(
         IReadOnlyList<ChatMessage> messages,

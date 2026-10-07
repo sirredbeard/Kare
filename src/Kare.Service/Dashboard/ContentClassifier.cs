@@ -27,6 +27,12 @@ public static class ContentClassifier
         "triage", "monitor", "backup", "restore",
     ];
 
+    private static readonly string[] TopicTags =
+    [
+        "api", "arduino", "cli", "dashboard", "github", "linux", "mcp", "repository",
+        "service", "skill", "source", "weather",
+    ];
+
     /// <summary>Maps common synonyms and tokenizer artifacts to one canonical tag.</summary>
     private static readonly IReadOnlyDictionary<string, string> Synonyms =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -54,7 +60,8 @@ public static class ContentClassifier
             ["monitoring"] = "monitor",
         };
 
-    public static readonly IReadOnlyList<string> Vocabulary = [.. LanguageTags, .. TaskTags];
+    public static readonly IReadOnlyList<string> Vocabulary =
+        [.. LanguageTags, .. TaskTags, .. TopicTags];
 
     /// <summary>Returns the bounded intersection of <paramref name="text"/> with the known
     /// language, framework, and task vocabulary, in vocabulary order.</summary>

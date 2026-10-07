@@ -442,7 +442,7 @@ The SDK route now uses `GitHub.Copilot.SDK` `1.0.16` behind a Kare cloud adapter
 
 - starts the runtime in `CopilotClientMode.Empty` so ambient host tools, skills, Git operations, and shared sessions are unavailable
 - uses GitHub `auto` with an explicit Auto V2 tier by default
-- applies a per-request timeout and the SDK's minimum 30-credit session ceiling
+- applies a per-request timeout without adding a Kare AI-credit ceiling unless protected configuration explicitly sets one
 - forwards caller-owned tools as declaration-only tools and returns requested calls without executing them on the board
 - can use GitHub Copilot authentication or direct Microsoft Foundry BYOK
 - deletes the temporary SDK session after each request

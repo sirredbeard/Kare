@@ -22,9 +22,12 @@ public sealed class CopilotSdkOptions
     [Required]
     public string AutoTier { get; set; } = "intelligence";
 
-    /// <summary>Soft GitHub AI credit ceiling for one escalated request.</summary>
+    /// <summary>
+    /// Optional soft GitHub AI credit ceiling for one escalated request. Leave unset to use
+    /// the caller's normal account and model policy without adding a Kare session ceiling.
+    /// </summary>
     [Range(30, 10_000)]
-    public double MaxAiCreditsPerRequest { get; set; } = 30;
+    public double? MaxAiCreditsPerRequest { get; set; }
 
     /// <summary>Hard wall-clock timeout for one SDK request.</summary>
     [Range(5, 1800)]

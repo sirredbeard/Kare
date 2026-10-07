@@ -19,4 +19,9 @@ internal sealed record PersistentCacheEntry(
     DateTime ExpiresAt,
     long? InputTokens,
     long? OutputTokens,
-    long? TotalTokens);
+    long? TotalTokens,
+    string? ModelId = null,
+    string? Route = null,
+    string? Backend = null,
+    List<string>? Keywords = null,
+    string? TaskClass = null);
