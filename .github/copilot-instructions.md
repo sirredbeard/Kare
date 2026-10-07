@@ -149,21 +149,36 @@ Use hooks and policy for redaction, route metadata, cache fingerprints, and acco
 
 ## Operations dashboard
 
-The service exposes the operations dashboard at `/dashboard`. It is for metadata Kare already owns and must not display or persist prompt text, source code, generated responses, credentials, provider tokens, or protected configuration.
+The service exposes the operations dashboard at `/dashboard`. Open `http://127.0.0.1:5285/dashboard` on the device, or forward port `5285` through SSH and open the forwarded local address in a browser. The dashboard is local by default. Do not make it non-loopback until authentication, request limits, and an explicit trusted CIDR allow-list are configured.
+
+The dashboard is for metadata Kare already owns. It must not display or persist prompt text, source code, generated responses, credentials, provider tokens, or protected configuration.
 
 The dashboard may show:
 
-- recent route decisions, model IDs, backends, fallback state, success, billable state, latency, token counts, and decode rate
-- queue depth, active local inference, completed requests, and average first-token latency
-- bounded cache hashes, timestamps, size, and delete controls
-- configured local, GitHub Copilot, and other external model endpoints
-- authoritative HTTPS source patterns and refresh status
-- skills loaded from explicit device paths or public HTTPS URLs
-- configured Streamable HTTP MCP servers, advertised capabilities, connection state, and last connection time
+- Recent route decisions, model IDs, backends, fallback state, success, billable state, latency, token counts, and decode rate.
+- Queue depth, active local inference, completed requests, and average first-token latency.
+- Bounded cache hashes, timestamps, size, and delete controls.
+- Configured local, GitHub Copilot, and other external model endpoints.
+- Authoritative HTTPS source patterns and refresh status.
+- Skills loaded from explicit device paths or public HTTPS URLs.
+- Configured Streamable HTTP MCP servers, advertised capabilities, connection state, and last connection time.
 
 Dashboard state stays bounded and process-local until the persistence design is complete. Repository defaults remain loopback-only. Non-loopback access requires explicit enablement and a trusted CIDR allow-list. The OpenAI-compatible API remains bearer-authenticated.
 
 The dashboard registry must not scan arbitrary home directories or import GitHub Copilot settings. Remote sources and skills need fixed page, byte, refresh, and injected-context limits.
+
+## Repository layout
+
+- `src/Kare.Service` - HTTP service, dashboard, and OpenAI-compatible endpoint.
+- `src/Kare.Core` - routing policy, limits, cache, and request handling.
+- `src/Kare.Cloud.Copilot` - GitHub Copilot SDK and configured cloud routes.
+- `src/Kare.Inference.GenieX` - local GenieX adapter.
+- `src/Kare.Inference.OnnxGenAI` - measured CPU fallback.
+- `src/Kare.CopilotLauncher` - cross-platform `copilot-kare` launcher.
+- `bench/Kare.DeviceProbe` - device and native runtime probe.
+- `findings/` - dated research and measured device results.
+- `plan.md` - architecture, open gates, and staged work.
+- `tests/Kare.Tests` - focused automated checks.
 
 ## Validation
 

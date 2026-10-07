@@ -139,22 +139,9 @@ After the first healthy connection, the launcher remembers the last working addr
 
 ## Operations dashboard
 
-Kare includes a local dashboard at `/dashboard`. I use it to see which route answered, first-token and total latency, queue activity, cache metadata, configured model endpoints, skills, authoritative sources, and MCP connection state.
+Kare includes a local dashboard at `/dashboard`. Open `http://127.0.0.1:5285/dashboard` on the Arduino itself, or forward port `5285` through the same SSH connection used by `copilot-kare` and open the forwarded local address in a browser.
 
-The dashboard stores operational metadata, not prompts, source code, generated responses, tokens, or protected config. Access and configuration details are in [Copilot instructions](.github/copilot-instructions.md#operations-dashboard).
-
-## Repo layout
-
-- `src/Kare.Service` - HTTP service, dashboard, and OpenAI-compatible endpoint.
-- `src/Kare.Core` - routing policy, limits, cache, and request handling.
-- `src/Kare.Cloud.Copilot` - GitHub Copilot SDK and configured cloud routes.
-- `src/Kare.Inference.GenieX` - local GenieX adapter.
-- `src/Kare.Inference.OnnxGenAI` - measured CPU fallback.
-- `src/Kare.CopilotLauncher` - cross-platform `copilot-kare` launcher.
-- `bench/Kare.DeviceProbe` - device and native runtime probe.
-- `findings/` - dated research and measured device results.
-- `plan.md` - architecture, open gates, and staged work.
-- `tests/Kare.Tests` - focused automated checks.
+The dashboard stores operational metadata, not prompts, source code, generated responses, tokens, or protected config. The access rules and feature list are in [Copilot instructions](.github/copilot-instructions.md#operations-dashboard).
 
 ## Related projects
 
