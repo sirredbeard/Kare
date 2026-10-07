@@ -269,7 +269,15 @@ The first migration is complete:
 5. Kare and GenieX restarted successfully, and both `/health` and `/v1/models` passed.
 6. Existing Kare and Azure command logs, GenieX cache data, and the old cloud catalog backup were deleted instead of copied.
 
-The service checkout, published Kare releases, protected configuration, and systemd user units remain on eMMC. No persistent logs, response-cache data, or backups were added to the NVMe layout. The bounded response cache remains process-local and starts empty after restart.
+The service checkout, published Kare releases, protected configuration, and systemd user units remain on eMMC.
+
+The next storage change adds restart-safe working state:
+
+1. `/var/lib/kare/logs` for rotating service logs, bounded to 25 MiB per file and 250 MiB total by default.
+2. `/var/lib/kare/cache/responses.json` for eligible deterministic response text and cascade route records, bounded to 64 MiB plus three local rollback snapshots by default.
+3. `/var/lib/kare/state/dashboard-registry.json` for bounded authoritative source content, remote skills, context version, MCP registrations, and last-known capabilities, plus three local rollback snapshots.
+
+The response cache stores opaque SHA-256 keys instead of raw prompts. It does persist eligible generated response text, so the cache directory is private data and must remain mode `700` with mode `600` files. Tool calls, truncated responses, nondeterministic requests, credentials, and raw prompt text are not written to the snapshot.
 
 The remaining storage work is narrow:
 
@@ -278,14 +286,17 @@ The remaining storage work is narrow:
 3. Measure cold model load, warm model load, and sustained temperature after the move.
 4. Add storage health metadata to the dashboard without exposing serial numbers, prompts, source code, or credentials.
 
-The first useful layout is:
+The useful layout is:
 
 ```
 /var/lib/kare/
+  cache/
+  logs/
   models/geniex/
   runtimes/geniex/
+  state/
 ```
 
-Keep model directories checksummed and versioned. Do not store prompts, source code, credentials, logs, cache entries, backups, or copied Copilot settings in a general-purpose storage directory just because it is large.
+Keep model directories checksummed and versioned. Keep logs and state bounded, private, and purpose-specific. Do not store raw prompts, source code, credentials, copied Copilot settings, or arbitrary home-directory content in `/var/lib/kare`.
 
 The drive is a storage and startup improvement, not an inference accelerator. GenieX still owns token latency. NVMe should reduce cold model load time and move the native runtime and model data away from the boot eMMC.

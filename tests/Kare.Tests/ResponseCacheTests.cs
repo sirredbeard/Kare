@@ -120,6 +120,134 @@ public sealed class ResponseCacheTests
         Assert.False(cache.TryGetCascadeTarget(messages, options: null, candidates, out _));
     }
 
+    [Fact]
+    public void EligibleResponseSurvivesRestartInProtectedSnapshot()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-cache-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "responses.json");
+        var messages = new[] { new ChatMessage(ChatRole.User, "hello") };
+        var options = new ChatOptions { ModelId = "kare-local", Temperature = 0 };
+
+        try
+        {
+            using (var first = CreatePersistentCache(path))
+            {
+                first.Set(
+                    messages,
+                    options,
+                    streaming: false,
+                    new ChatResponse(new ChatMessage(ChatRole.Assistant, "cached")));
+            }
+
+            using var second = CreatePersistentCache(path);
+            Assert.True(second.TryGet(messages, options, streaming: false, out var response));
+            Assert.Equal("cached", response!.Text);
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    File.GetUnixFileMode(path));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void PersistentCacheKeepsRotatingBackupAndClearState()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-cache-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "responses.json");
+        var options = new ChatOptions { ModelId = "kare-local", Temperature = 0 };
+
+        try
+        {
+            using (var cache = CreatePersistentCache(path))
+            {
+                cache.Set(
+                    [new ChatMessage(ChatRole.User, "first")],
+                    options,
+                    streaming: false,
+                    new ChatResponse(new ChatMessage(ChatRole.Assistant, "one")));
+                cache.Set(
+                    [new ChatMessage(ChatRole.User, "second")],
+                    options,
+                    streaming: false,
+                    new ChatResponse(new ChatMessage(ChatRole.Assistant, "two")));
+                cache.Clear();
+            }
+
+            Assert.True(File.Exists(path + ".bak1"));
+            using var reloaded = CreatePersistentCache(path);
+            Assert.False(reloaded.TryGet(
+                [new ChatMessage(ChatRole.User, "first")],
+                options,
+                streaming: false,
+                out _));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void PersistentCacheRecoversFromNewestValidBackup()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-cache-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "responses.json");
+        var options = new ChatOptions { ModelId = "kare-local", Temperature = 0 };
+        var firstMessages = new[] { new ChatMessage(ChatRole.User, "first") };
+
+        try
+        {
+            using (var cache = CreatePersistentCache(path))
+            {
+                cache.Set(
+                    firstMessages,
+                    options,
+                    streaming: false,
+                    new ChatResponse(new ChatMessage(ChatRole.Assistant, "one")));
+                cache.Set(
+                    [new ChatMessage(ChatRole.User, "second")],
+                    options,
+                    streaming: false,
+                    new ChatResponse(new ChatMessage(ChatRole.Assistant, "two")));
+            }
+
+            File.WriteAllText(path, "{broken");
+
+            using var recovered = CreatePersistentCache(path);
+            Assert.True(recovered.TryGet(
+                firstMessages,
+                options,
+                streaming: false,
+                out var response));
+            Assert.Equal("one", response!.Text);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     private static ResponseCache CreateCache(
         IDashboardMetricsCollector? dashboard = null,
         IDashboardKnowledgeService? knowledge = null) =>
@@ -129,6 +257,18 @@ public sealed class ResponseCacheTests
             MaxEntries = 8,
             EntryLifetimeSeconds = 60,
         }), dashboard, knowledge);
+
+    private static ResponseCache CreatePersistentCache(string path) =>
+        new(Options.Create(new ResponseCacheOptions
+        {
+            Enabled = true,
+            MaxEntries = 8,
+            EntryLifetimeSeconds = 60,
+            PersistenceEnabled = true,
+            PersistencePath = path,
+            MaxPersistentBytes = 1024 * 1024,
+            BackupCount = 2,
+        }));
 
     private static CloudModelDescriptor[] CreateCandidates() =>
     [

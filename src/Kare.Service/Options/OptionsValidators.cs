@@ -55,6 +55,26 @@ public sealed class RoutePolicySemanticValidator : IValidateOptions<RoutePolicyO
 [OptionsValidator]
 public sealed partial class ResponseCacheOptionsValidator : IValidateOptions<ResponseCacheOptions>;
 
+/// <summary>Validates response-cache persistence settings.</summary>
+public sealed class ResponseCachePersistenceValidator : IValidateOptions<ResponseCacheOptions>
+{
+    /// <inheritdoc />
+    public ValidateOptionsResult Validate(string? name, ResponseCacheOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.PersistenceEnabled)
+        {
+            return ValidateOptionsResult.Success;
+        }
+
+        return !string.IsNullOrWhiteSpace(options.PersistencePath) &&
+            Path.IsPathRooted(options.PersistencePath)
+                ? ValidateOptionsResult.Success
+                : ValidateOptionsResult.Fail(
+                    "PersistencePath must be an absolute path when response-cache persistence is enabled.");
+    }
+}
+
 /// <summary>Compile time validator for <see cref="OnnxGenAiOptions"/>.</summary>
 [OptionsValidator]
 public sealed partial class OnnxGenAiOptionsValidator : IValidateOptions<OnnxGenAiOptions>;

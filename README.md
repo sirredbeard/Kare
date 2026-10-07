@@ -1,22 +1,26 @@
 # Kare
 
-Kare is a local gate for GitHub Copilot CLI BYOK. It keeps the device-side config outside the repo, exposes a small OpenAI-compatible `/v1` surface, and routes requests through a local model first before it considers a cloud or signed-in path.
+Kare is a local gateway and orchestrator for GitHub Copilot. It starts on the edge, keeps useful coding context nearby, and then fans out to GitHub Copilot, Microsoft Foundry, or other configured endpoints when the task is too big, too risky, or too expensive for the local model.
+
+Kare is built for the [Arduino VENTUNO Q](https://www.arduino.cc/product-ventuno-q), runs on Arm, and is written in the latest .NET 11 RC so the hot path stays tight. It keeps a local cache, stored skills, MCP server state, authoritative sources, and a small OpenAI-compatible `/v1` layer so GitHub Copilot CLI can talk to it over BYOK without pretending to be a full GitHub-native orchestration stack.
+
+The routing design borrows ideas from GitHub's [Project HydraFusion](https://github.blog/ai-and-ml/github-copilot/project-hydrafusion-frontier-quality-via-multi-model-orchestration/) and my [Lerna](https://github.com/sirredbeard/Lerna) project, however Kare owns its routing, cache, policy, and OpenAI-compatible endpoint. It does not run HydraFusion or Lerna. It supports multiple endpoints, not just one provider, and it keeps the decision path explicit instead of silently billing into the cloud.
+
+This project is still in research and development. Things I learn along the way are stored in [`findings/`](findings/), the current architecture is in [`plan.md`](plan.md), and the operational details are in [Copilot instructions](.github/copilot-instructions.md).
+
+## Experiment
 
 I wanted GitHub Copilot to use a small model running on hardware I own, keep useful coding context nearby, and still have a deliberate route to bigger models when the local answer is not good enough. Kare is that experiment.
-
-The routing design borrows ideas from GitHub's [Project HydraFusion](https://github.blog/ai-and-ml/github-copilot/project-hydrafusion-frontier-quality-via-multi-model-orchestration/) and my [Lerna](https://github.com/sirredbeard/Lerna) project, however Kare owns it's routing, cache, policy, and OpenAI-compatible endpoint. It does not run HydraFusion or Lerna.
-
-This project is still in research and development. The complete measurements are in [`findings/`](findings/), the current architecture is in [`plan.md`](plan.md), and the operational details are in [Copilot instructions](.github/copilot-instructions.md).
 
 ## How I got here
 
 The original idea was simple: put a small coding model on the edge, let it answer the cheap and repetitive requests, cache results that are actually safe to reuse, and send the difficult work to GitHub Copilot only when policy says it should.
 
-The first runtime path was ONNX Runtime GenAI because it has a real .NET API, supports Linux ARM64, and keeps the service behind `IChatClient`. It worked. Microsoft Phi-4-mini INT4 loaded on the board and generated tokens, however one measured run needed 26.408 seconds for the first token and decoded at 7.17 tokens per second. Qwen3 1.7B was much better: 1.423 seconds to first token on the short prompt and 14.66 tokens per second.
+The first runtime path was ONNX Runtime. It worked. Microsoft Phi-4-mini INT4 loaded on the board and generated tokens, however one measured run needed 26.408 seconds for the first token and decoded at 7.17 tokens per second. Qwen3 1.7B was much better though: 1.423 seconds to first token on the short prompt and 14.66 tokens per second.
 
 Then I tested the same Qwen3 1.7B base model family through [Qualcomm GenieX](https://github.com/qualcomm/GenieX) on the Hexagon NPU. On the longer prompt, ONNX needed 5.208 seconds before the first token. GenieX processed the prompt in about 0.229 seconds and decoded about 1.6 times faster.
 
-That made the runtime decision pretty easy. GenieX is the primary local path. ONNX Runtime GenAI stays as the CPU fallback because a local service should remain useful when the accelerator runtime is missing.
+That made the runtime decision pretty easy. GenieX is the primary local path. ONNX Runtime GenAI is still implemented as a CPU fallback.
 
 The failures shaped Kare just as much:
 
@@ -24,15 +28,13 @@ The failures shaped Kare just as much:
 - The first QAIRT Qwen bundle is fixed at 4096 tokens. Copilot CLI's starting prompt is already larger than that.
 - The five-prompt coding smoke test produced two exact answers from ONNX and two from GenieX. Neither model should write unreviewed patches.
 - ONNX sometimes emitted malformed fences. GenieX sometimes emitted empty reasoning tags. Kare has to normalize protocol details without quietly rewriting model output.
-- Copilot CLI extensions can add tools and commands, but the documented extension API cannot replace the model transport. BYOK is the supported route.
 
-So Kare is deliberately conservative: local first, bounded context, explicit escalation, no silent billable fallback, and no pretending a small model is a frontier coding agent.
+Kare is deliberately conservative: local first, bounded context, explicit escalation, no silent billable fallback, and no pretending a small model is a frontier coding agent.
 
 ## Design decisions
 
-- `Microsoft.Extensions.AI` and `IChatClient` are the service boundary. Native runtimes stay behind adapters.
 - GenieX is the default local runtime because it won the measured latency comparison on this board.
-- ONNX Runtime GenAI remains the CPU fallback because fallback is a normal operating mode, not an error.
+- ONNX Runtime GenAI remains the CPU fallback.
 - GitHub Copilot CLI connects through BYOK to Kare's OpenAI-compatible endpoint.
 - GitHub Copilot SDK sessions are a separate cloud route. Kare does not claim they are the same session as a Copilot CLI TUI session.
 - Cache entries need model, prompt, repository revision, file hashes, policy, and version context. Raw prompt text is not a safe cache key.
@@ -43,15 +45,15 @@ So Kare is deliberately conservative: local first, bounded context, explicit esc
 
 I am running Kare on an [Arduino VENTUNO Q](https://www.arduino.cc/product-ventuno-q) with:
 
-- Ubuntu 24.04.5 on ARM64.
-- Qualcomm Dragonwing IQ8 / QCS8275.
-- Eight Cortex-A55 and Cortex-A78C CPU cores.
-- Qualcomm Hexagon V75 NPU and Adreno 623 GPU.
-- 16 GB LPDDR5 memory.
-- 64 GB eMMC.
-- A 512 GB OSCOO PCIe NVMe drive in the M.2 slot. It is mounted at `/var/lib/kare` and currently negotiates a PCIe Gen4 x1 link.
+- Ubuntu 24.05 on Arm
+- Qualcomm Dragonwing IQ8 / QCS8275
+- Eight Cortex-A55 and Cortex-A78C CPU cores
+- Qualcomm Hexagon V75 NPU and Adreno 623 GPU
+- 16 GB LPDDR5 memory
+- 64 GB eMMC
+- A 512 GB PCIe NVMe drive
 
-The service is .NET 11. GitHub Copilot CLI runs on the workstation, `copilot-kare` opens a protected SSH tunnel to the board, and Kare listens on loopback.
+The service is .NET 11. GitHub Copilot CLI runs on a number of devices in my lab, `copilot-kare` opens a protected SSH tunnel to the board, and Kare listens on loopback.
 
 ```text
 GitHub Copilot CLI
@@ -68,28 +70,9 @@ Kare on the VENTUNO Q
 
 ## NVMe storage
 
-The board boots from eMMC. The model and native runtime data now live on a separate 512 GB NVMe drive mounted at `/var/lib/kare`.
+The board boots from eMMC, however Kare keeps models, native runtimes, logs, cached answers, authoritative sources, remote skills, and restart snapshots on a separate 512 GB NVMe drive. That keeps the write-heavy work away from the boot device and lets Kare come back warm after a restart instead of rebuilding everything from zero.
 
-That split is deliberate. The NVMe read test reached 1.6 GB/s, compared with 294 MB/s from the eMMC. The drive also gives model files and native runtime files a replaceable home, so repeated model work does not grind on the boot device.
-
-The current layout is:
-
-```text
-/var/lib/kare/
-  models/geniex/       GenieX model data
-  runtimes/geniex/     GenieX Linux ARM64 runtime
-```
-
-The service checkout, published Kare releases, protected configuration, and systemd user units remain on eMMC. Kare does not retain persistent logs, response-cache data, or backups on the NVMe drive. The bounded response cache is process-local and starts empty after a restart.
-
-The drive currently negotiates PCIe Gen4 x1 even though the root port advertises x4. That is good enough to make the storage useful, however the link is still an open hardware investigation.
-
-To inspect the layout on the board:
-
-```bash
-findmnt -T /var/lib/kare
-du -sh /var/lib/kare/models /var/lib/kare/runtimes
-```
+The measured layout, retention rules, and current PCIe link investigation live in [`findings/nvme-storage.md`](findings/nvme-storage.md) and [Copilot instructions](.github/copilot-instructions.md#device-storage-layout).
 
 ## What works today
 

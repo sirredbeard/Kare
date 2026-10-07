@@ -186,7 +186,7 @@ public sealed class DashboardTests
                 File.Delete(statePath);
             }
 
-            Directory.Delete(directory);
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -233,7 +233,180 @@ public sealed class DashboardTests
                 File.Delete(statePath);
             }
 
-            Directory.Delete(directory);
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSkillAndContextVersionSurviveRestart()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new StaticResponseHandler(
+            "Use the restart-safe measured runtime.",
+            "text/markdown"));
+
+        try
+        {
+            var first = new DashboardKnowledgeService(
+                new InMemoryMetricsCollector(),
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await first.AddSkillAsync(
+                new CreateDashboardSkillRequest(
+                    "remote-runtime",
+                    "https://1.1.1.1/SKILL.md",
+                    "Remote runtime rule",
+                    Enabled: true),
+                TestContext.Current.CancellationToken);
+            var persistedVersion = first.ContextVersion;
+
+            var collector = new InMemoryMetricsCollector();
+            var second = new DashboardKnowledgeService(
+                collector,
+                new StaticHttpClientFactory(new HttpClient(new FailingResponseHandler())),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await second.StartAsync(TestContext.Current.CancellationToken);
+            try
+            {
+                await WaitUntilAsync(
+                    () => collector.GetSkills().Any(item => item.Name == "remote-runtime"),
+                    TestContext.Current.CancellationToken);
+                var enriched = await second.AddLocalContextAsync(
+                    [new ChatMessage(ChatRole.User, "Which runtime should I use?")],
+                    TestContext.Current.CancellationToken);
+
+                Assert.Equal(persistedVersion, second.ContextVersion);
+                Assert.Contains(
+                    "Use the restart-safe measured runtime.",
+                    enriched[0].Contents.OfType<TextContent>().Single().Text,
+                    StringComparison.Ordinal);
+                Assert.True(File.Exists(statePath + ".bak1"));
+            }
+            finally
+            {
+                await second.StopAsync(TestContext.Current.CancellationToken);
+                second.Dispose();
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AuthoritativeSourceContentSurvivesRestartAndFailedRefresh()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new StaticResponseHandler(
+            "The measured restart path uses GenieX.",
+            "text/plain"));
+
+        try
+        {
+            var first = new DashboardKnowledgeService(
+                new InMemoryMetricsCollector(),
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await first.AddSourceAsync(
+                new CreateAuthoritativeSourceRequest("https://1.1.1.1/reference"),
+                TestContext.Current.CancellationToken);
+
+            var collector = new InMemoryMetricsCollector();
+            var second = new DashboardKnowledgeService(
+                collector,
+                new StaticHttpClientFactory(new HttpClient(new FailingResponseHandler())),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await second.StartAsync(TestContext.Current.CancellationToken);
+            try
+            {
+                await WaitUntilAsync(
+                    () => collector.GetRoutingDecisionUrls().Count > 0,
+                    TestContext.Current.CancellationToken);
+                var enriched = await second.AddLocalContextAsync(
+                    [new ChatMessage(ChatRole.User, "Which restart path is measured?")],
+                    TestContext.Current.CancellationToken);
+
+                Assert.Contains(
+                    "The measured restart path uses GenieX.",
+                    enriched[0].Contents.OfType<TextContent>().Single().Text,
+                    StringComparison.Ordinal);
+            }
+            finally
+            {
+                await second.StopAsync(TestContext.Current.CancellationToken);
+                second.Dispose();
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LastKnownMcpCapabilitiesSurviveFailedStartupProbe()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var statePath = Path.Combine(directory, "registry.json");
+        using var client = new HttpClient(new StaticResponseHandler(
+            """{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{},"resources":{}}}}""",
+            "application/json"));
+
+        try
+        {
+            var first = new DashboardKnowledgeService(
+                new InMemoryMetricsCollector(),
+                new StaticHttpClientFactory(client),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await first.AddMcpServerAsync(
+                new CreateDashboardMcpServerRequest("workspace-tools", "https://1.1.1.1/mcp"),
+                TestContext.Current.CancellationToken);
+
+            var collector = new InMemoryMetricsCollector();
+            var second = new DashboardKnowledgeService(
+                collector,
+                new StaticHttpClientFactory(new HttpClient(new FailingResponseHandler())),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await second.StartAsync(TestContext.Current.CancellationToken);
+            try
+            {
+                await WaitUntilAsync(
+                    () => collector.GetMcpServers()
+                        .Any(item => item.Name == "workspace-tools" && item.LastCheckedAt is not null),
+                    TestContext.Current.CancellationToken);
+                var metric = Assert.Single(collector.GetMcpServers());
+
+                Assert.False(metric.Connected);
+                Assert.Equal(["tools", "resources"], metric.Capabilities);
+                Assert.NotNull(metric.LastConnectedAt);
+            }
+            finally
+            {
+                await second.StopAsync(TestContext.Current.CancellationToken);
+                second.Dispose();
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -277,7 +450,7 @@ public sealed class DashboardTests
                 File.Delete(statePath);
             }
 
-            Directory.Delete(directory);
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -331,7 +504,7 @@ public sealed class DashboardTests
                 File.Delete(statePath);
             }
 
-            Directory.Delete(directory);
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -368,7 +541,7 @@ public sealed class DashboardTests
                 File.Delete(statePath);
             }
 
-            Directory.Delete(directory);
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -428,6 +601,31 @@ public sealed class DashboardTests
             {
                 Content = new StringContent("late", Encoding.UTF8, "text/plain"),
             };
+        }
+    }
+
+    private sealed class FailingResponseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            throw new HttpRequestException("offline");
+    }
+
+    private static async Task WaitUntilAsync(
+        Func<bool> condition,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException("The expected dashboard state was not loaded.");
+            }
+
+            await Task.Delay(20, cancellationToken);
         }
     }
 }

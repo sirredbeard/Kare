@@ -481,15 +481,19 @@ The first dashboard surface should show:
 - configured MCP servers, advertised capabilities, connection state, and last connection time
 - recent route and fallback activity without prompt or response contents
 
-Dashboard state should be bounded and process-local until PostgreSQL persistence is designed. The page and API remain behind Kare's explicit CIDR network allow-list but do not require a bearer token on the trusted LAN. The OpenAI-compatible API remains bearer-authenticated. Repository defaults must remain loopback-only and must not contain a development password, device subnet, or API key.
+Dashboard metrics remain bounded and process-local. The knowledge registry now uses a protected restart-safe snapshot for source registrations and content, remote skills, context version, MCP registrations, and last-known capabilities. The page and API remain behind Kare's explicit CIDR network allow-list but do not require a bearer token on the trusted LAN. The OpenAI-compatible API remains bearer-authenticated. Repository defaults must remain loopback-only and must not contain a development password, device subnet, or API key.
 
 Kare now owns bounded registries for authoritative HTTPS source patterns, skills loaded from explicit absolute device paths or public HTTPS URLs, and Streamable HTTP MCP endpoints. Source patterns and remote skills are periodically refreshed with fixed page, byte, and injected-context limits. Enabled source and skill content is added only to local inference. MCP status comes from Kare's own initialize probes. Kare does not scan arbitrary home directories or copy Copilot settings to populate these registries.
 
 ## Persistence and context memory
 
-Use PostgreSQL with `pgvector` on the VENTUNO Q. Use EF Core through Npgsql for relational data and `Pgvector.EntityFrameworkCore` for vector fields once the package versions support the selected EF Core major version.
+The first persistence tier is a bounded protected filesystem snapshot on NVMe. It is small enough to inspect and recover, requires no new service dependency, and matches the data Kare owns today.
 
-PostgreSQL is the better fit than SQLite or a document database here:
+The response cache writes opaque hashed keys, eligible deterministic response text, route IDs, token counts, creation time, and absolute expiration. It rejects truncated answers, tool calls, nondeterministic requests, and oversized records. The knowledge registry writes bounded source content, remote skills, context version, registrations, and last-known MCP capabilities. Both use atomic replacement, mode `600` files, mode `700` directories, and three rotating local snapshots by default.
+
+PostgreSQL with `pgvector` remains the second persistence tier when Kare has enough measured retrieval and accounting data to justify it. Use EF Core through Npgsql for relational data and `Pgvector.EntityFrameworkCore` for vector fields once the package versions support the selected EF Core major version.
+
+PostgreSQL is the better fit than SQLite or a document database for the later indexed tier:
 
 - Concurrent request, cache, context, and accounting writes do not share SQLite's single-writer limit.
 - JSONB stores provider-specific metadata without giving up relational constraints.
@@ -498,7 +502,7 @@ PostgreSQL is the better fit than SQLite or a document database here:
 - The same schema can be restored into Azure Database for PostgreSQL Flexible Server, where the `vector` extension is supported.
 - Npgsql and pgvector have direct .NET and EF Core support.
 
-Do not use the database as a token cache or a dumping ground for complete repositories. Keep model files, compiled graphs, large immutable blobs, and disposable tokenized prefixes on NVMe. Store metadata, hashes, provenance, compacted context, embeddings, route accounting, validation results, and bounded cache records in PostgreSQL.
+Do not use either tier as a token cache or a dumping ground for complete repositories. Keep model files, compiled graphs, large immutable blobs, and disposable tokenized prefixes on NVMe. Store metadata, hashes, provenance, compacted context, embeddings, route accounting, validation results, and bounded cache records in PostgreSQL when that tier exists.
 
 ### NVMe storage plan
 
@@ -515,7 +519,7 @@ The first migration is complete:
 5. Kare and GenieX restarted successfully, and both `/health` and `/v1/models` passed.
 6. Existing Kare and Azure command logs, GenieX cache data, and the old cloud catalog backup were deleted instead of copied.
 
-Do not add persistent logs, response-cache data, or backups to the NVMe layout. The response cache remains process-local and bounded. PostgreSQL, indexes, and benchmark artifacts are future work, not part of this migration.
+The next migration adds bounded persistent state under `/var/lib/kare/logs`, `/var/lib/kare/cache`, and `/var/lib/kare/state`. Logs retain 25 MiB per file and 250 MiB total by default. The response cache retains no more than its configured entry, lifetime, response-size, and 64 MiB snapshot limits. Cache and knowledge files keep three local rollback snapshots. PostgreSQL, indexes, and off-device encrypted backups remain future work.
 
 The remaining storage work is narrow:
 
@@ -530,7 +534,7 @@ NVMe should improve model startup and model switching. It will not change GenieX
 
 The launcher can capture Copilot CLI debug logs under protected local configuration. The logs show tool count, MCP initialization, model resolution, and `compaction_static_context_pressure` without requiring changes to Kare.
 
-The Kare service supports an optional rotating file logger for device iteration. Keep it on eMMC under the user's local state directory, roll at 25 MiB, and cap retained files at 250 MiB. Verbose logging is an explicit protected deployment setting. Do not log prompts, source code, responses, credentials, or provider tokens.
+The Kare service supports an optional rotating file logger for device iteration. Keep it on NVMe under `/var/lib/kare/logs`, roll at 25 MiB, and cap retained files at 250 MiB. Verbose logging is an explicit protected deployment setting. Do not log prompts, source code, responses, credentials, or provider tokens.
 
 Use separate records for:
 
@@ -543,7 +547,15 @@ Use separate records for:
 - Route decisions, token usage, latency, and estimated cloud cost
 - Model, runtime, tokenizer, skill, and instruction versions
 
-Backups should be boring and testable:
+The current rollback snapshots should be boring and testable:
+
+1. Write the new JSON state to a private temporary file.
+2. Rotate the previous active file through `.bak1`, `.bak2`, and `.bak3`.
+3. Replace the active file atomically.
+4. Reload the active file after restart and discard expired cache entries.
+5. Restore a previous local snapshot by stopping Kare, copying the selected backup over the active file, preserving mode `600`, and restarting the service.
+
+The later database backup path remains:
 
 1. Run local PostgreSQL on NVMe with checksums, WAL limits, and bounded retention.
 2. Create encrypted `pg_dump` archives on a schedule and after schema changes.
@@ -680,9 +692,9 @@ runtime                project-local .NET 11 RC on the board
 ### Stage 5: cache and shared knowledge
 
 - Add versioned request keys. Done for the conservative response cache.
-- Add bounded cache storage. Done in memory with entry, lifetime, and response-size limits.
-- Add repository and skill metadata.
-- Add invalidation and deletion.
+- Add bounded cache storage. Done in memory and in an optional protected restart-safe snapshot with entry, lifetime, response-size, and byte limits.
+- Add repository and skill metadata. Skill, source, context-version, and MCP registry snapshots are restart-safe.
+- Add invalidation and deletion. Expiration, context-version invalidation, dashboard deletion, clear, and deterministic size eviction are implemented.
 - Measure cache hit quality and stale-context failures.
 
 ### Stage 6: Copilot integration

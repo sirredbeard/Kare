@@ -8,6 +8,15 @@
       "CascadeDecisionMaxInputCharacters": 1024,
       "CascadeDecisionMaxOutputTokens": 32
     },
+    "Cache": {
+      "Responses": {
+        "Enabled": true,
+        "PersistenceEnabled": true,
+        "PersistencePath": "/var/lib/kare/cache/responses.json",
+        "MaxPersistentBytes": 67108864,
+        "BackupCount": 3
+      }
+    },
     "Cloud": {
       "CopilotSdk": {
         "Enabled": true,

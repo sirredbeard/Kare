@@ -68,6 +68,7 @@ builder.Services
     .Bind(builder.Configuration.GetSection(ResponseCacheOptions.SectionName))
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<ResponseCacheOptions>, ResponseCacheOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<ResponseCacheOptions>, ResponseCachePersistenceValidator>();
 
 builder.Services
     .AddOptions<CopilotSdkOptions>()

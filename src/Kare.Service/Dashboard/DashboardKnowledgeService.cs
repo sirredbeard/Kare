@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Kare.Service.Storage;
 using Microsoft.Extensions.AI;
 
 namespace Kare.Service.Dashboard;
@@ -47,7 +48,7 @@ public sealed record CreateDashboardSkillRequest(
 /// <summary>Payload for registering a Streamable HTTP MCP endpoint.</summary>
 public sealed record CreateDashboardMcpServerRequest(string Name, string Endpoint);
 
-/// <summary>Bounded process-local content registry with protected configuration persistence.</summary>
+/// <summary>Bounded content registry with protected restart-safe persistence.</summary>
 public sealed partial class DashboardKnowledgeService : BackgroundService, IDashboardKnowledgeService
 {
     private const int MaxSources = 50;
@@ -58,6 +59,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     private const int MaxSourceCharacters = 256 * 1024;
     private const int MaxSkillBytes = 256 * 1024;
     private const int MaxInjectedCharacters = 12_000;
+    private const int MaxStateBytes = 48 * 1024 * 1024;
+    private const int StateBackupCount = 3;
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(15);
 
     private readonly Lock _sync = new();
@@ -70,7 +73,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     private readonly Dictionary<string, SkillRegistration> _skills = new(StringComparer.Ordinal);
     private readonly Dictionary<string, McpRegistration> _mcpServers = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _sourceContent = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, RemoteSkillContent> _remoteSkillContent = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RemoteSkillSnapshot> _remoteSkillContent = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _localSkillVersions = new(StringComparer.Ordinal);
     private long _contextVersion;
 
     public string ContextVersion =>
@@ -84,10 +88,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             collector,
             httpClientFactory,
             logger,
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "kare",
-                "dashboard-registry.json"))
+            GetDefaultStatePath())
     {
     }
 
@@ -103,6 +104,11 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         _collector = collector;
         _httpClient = httpClientFactory.CreateClient(nameof(DashboardKnowledgeService));
         _logger = logger;
+        if (!Path.IsPathRooted(statePath))
+        {
+            throw new ArgumentException("Dashboard state path must be absolute.", nameof(statePath));
+        }
+
         _statePath = statePath;
     }
 
@@ -204,6 +210,10 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             }
 
             _skills[registration.Name] = registration;
+            if (!isRemote)
+            {
+                _localSkillVersions[registration.Name] = GetLocalSkillVersion(registration.Path);
+            }
         }
         Interlocked.Increment(ref _contextVersion);
 
@@ -228,6 +238,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         {
             removed = _skills.Remove(name);
             _remoteSkillContent.Remove(name);
+            _localSkillVersions.Remove(name);
         }
 
         if (removed)
@@ -264,7 +275,9 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         }
 
         await PersistAsync(cancellationToken).ConfigureAwait(false);
-        return await ProbeMcpServerAsync(registration, cancellationToken).ConfigureAwait(false);
+        var metric = await ProbeMcpServerAsync(registration, cancellationToken).ConfigureAwait(false);
+        await PersistAsync(cancellationToken).ConfigureAwait(false);
+        return metric;
     }
 
     public async Task<bool> RemoveMcpServerAsync(string name, CancellationToken cancellationToken)
@@ -412,34 +425,57 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
         foreach (var source in sources)
         {
-            await CrawlSourceAsync(source, cancellationToken).ConfigureAwait(false);
+            await CrawlSourceAsync(source, cancellationToken, persist: false).ConfigureAwait(false);
         }
 
         foreach (var skill in skills)
         {
             if (skill.Enabled && TryGetRemoteSkillUri(skill.Path, out var remoteUri))
             {
-                await RefreshRemoteSkillAsync(skill, remoteUri, cancellationToken).ConfigureAwait(false);
+                await RefreshRemoteSkillAsync(
+                    skill,
+                    remoteUri,
+                    cancellationToken,
+                    persist: false).ConfigureAwait(false);
             }
             else
             {
-                _collector.RegisterSkill(InspectSkill(skill));
+                var metric = InspectSkill(skill);
+                _collector.RegisterSkill(metric);
+                if (skill.Enabled && metric.Status == "ready")
+                {
+                    var currentVersion = GetLocalSkillVersion(skill.Path);
+                    bool changed;
+                    lock (_sync)
+                    {
+                        changed = _localSkillVersions.TryGetValue(skill.Name, out var previousVersion) &&
+                            !string.Equals(previousVersion, currentVersion, StringComparison.Ordinal);
+                        _localSkillVersions[skill.Name] = currentVersion;
+                    }
+
+                    if (changed)
+                    {
+                        Interlocked.Increment(ref _contextVersion);
+                    }
+                }
             }
-        }
-        if (skills.Length > 0)
-        {
-            Interlocked.Increment(ref _contextVersion);
         }
 
         foreach (var server in mcpServers)
         {
             await ProbeMcpServerAsync(server, cancellationToken).ConfigureAwait(false);
         }
+
+        if (sources.Length > 0 || skills.Length > 0 || mcpServers.Length > 0)
+        {
+            await PersistAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task CrawlSourceAsync(
         SourceRegistration source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool persist = true)
     {
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var pending = new Queue<Uri>();
@@ -501,11 +537,17 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             var value = content.Length > MaxSourceCharacters
                 ? content.ToString(0, MaxSourceCharacters)
                 : content.ToString();
+            bool changed;
             lock (_sync)
             {
+                changed = !_sourceContent.TryGetValue(source.Id, out var previous) ||
+                    !string.Equals(previous, value, StringComparison.Ordinal);
                 _sourceContent[source.Id] = value;
             }
-            Interlocked.Increment(ref _contextVersion);
+            if (changed)
+            {
+                Interlocked.Increment(ref _contextVersion);
+            }
 
             _collector.RegisterRoutingDecisionUrl(new DashboardMetrics.RoutingDecisionUrl(
                 source.Id,
@@ -518,6 +560,10 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 value.Length,
                 "ready",
                 Error: null));
+            if (persist)
+            {
+                await PersistAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (
             !cancellationToken.IsCancellationRequested &&
@@ -603,12 +649,14 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             ex is HttpRequestException or IOException or JsonException or TaskCanceledException)
         {
             _logger.LogWarning(ex, "MCP probe failed for server {ServerName}.", server.Name);
+            var previous = _collector.GetMcpServers()
+                .FirstOrDefault(item => string.Equals(item.Name, server.Name, StringComparison.Ordinal));
             var metric = new DashboardMetrics.McpServerInfo(
                 server.Name,
                 server.Endpoint.ToString(),
-                [],
+                previous?.Capabilities ?? [],
                 Connected: false,
-                LastConnectedAt: null,
+                LastConnectedAt: previous?.LastConnectedAt,
                 LastCheckedAt: now,
                 ex.Message);
             RegisterMcpServer(metric);
@@ -631,47 +679,123 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
     private async Task LoadAsync(CancellationToken cancellationToken)
     {
-        if (!File.Exists(_statePath))
+        DashboardRegistryState? state = null;
+        Exception? lastError = null;
+        string? loadedPath = null;
+        var candidates = new[] { _statePath }
+            .Concat(Enumerable.Range(1, StateBackupCount)
+                .Select(index => $"{_statePath}.bak{index}"));
+        foreach (var candidate in candidates.Where(File.Exists))
         {
+            try
+            {
+                var bytes = await File.ReadAllBytesAsync(candidate, cancellationToken)
+                    .ConfigureAwait(false);
+                if (bytes.Length > MaxStateBytes)
+                {
+                    throw new InvalidDataException(
+                        $"Dashboard state exceeds the {MaxStateBytes}-byte persistence limit.");
+                }
+
+                state = JsonSerializer.Deserialize(
+                    bytes,
+                    DashboardJsonContext.Default.DashboardRegistryState)
+                    ?? throw new InvalidDataException("Dashboard state snapshot is empty.");
+                loadedPath = candidate;
+                break;
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or InvalidDataException)
+            {
+                lastError = ex;
+                _logger.LogError(ex, "Failed to load dashboard state snapshot {StatePath}.", candidate);
+            }
+        }
+
+        if (state is null)
+        {
+            if (lastError is not null)
+            {
+                throw new InvalidDataException(
+                    "No valid dashboard state snapshot or backup could be loaded.",
+                    lastError);
+            }
+
             return;
         }
 
-        await using var stream = File.OpenRead(_statePath);
-        var state = await JsonSerializer.DeserializeAsync(
-            stream,
-            DashboardJsonContext.Default.DashboardRegistryState,
-            cancellationToken).ConfigureAwait(false);
-        if (state is null)
+        if (!string.Equals(loadedPath, _statePath, StringComparison.Ordinal))
         {
-            return;
+            _logger.LogWarning(
+                "Recovered dashboard state from backup snapshot {StatePath}.",
+                loadedPath);
         }
 
         lock (_sync)
         {
+            _contextVersion = state.ContextVersion;
             foreach (var source in state.Sources)
             {
                 _sources[source.Id] = source;
-                _collector.RegisterRoutingDecisionUrl(ToPendingMetric(source));
+                var snapshot = state.SourceContent?.FirstOrDefault(item => item.SourceId == source.Id);
+                if (snapshot is null)
+                {
+                    _collector.RegisterRoutingDecisionUrl(ToPendingMetric(source));
+                }
+                else
+                {
+                    _sourceContent[source.Id] = snapshot.Content;
+                    _collector.RegisterRoutingDecisionUrl(new DashboardMetrics.RoutingDecisionUrl(
+                        source.Id,
+                        source.Pattern,
+                        source.Enabled,
+                        source.CreatedAt,
+                        source.LastModifiedAt,
+                        snapshot.FetchedAt,
+                        snapshot.PageCount,
+                        snapshot.Content.Length,
+                        source.Enabled ? "ready" : "disabled",
+                        Error: null));
+                }
             }
 
             foreach (var skill in state.Skills)
             {
                 _skills[skill.Name] = skill;
+                var snapshot = state.RemoteSkillContent?
+                    .FirstOrDefault(item => item.Name == skill.Name);
+                if (snapshot is not null)
+                {
+                    _remoteSkillContent[skill.Name] = snapshot;
+                }
+                else if (!TryGetRemoteSkillUri(skill.Path, out _))
+                {
+                    _localSkillVersions[skill.Name] = GetLocalSkillVersion(skill.Path);
+                }
+
                 _collector.RegisterSkill(InspectSkill(skill));
             }
 
             foreach (var server in state.McpServers)
             {
                 _mcpServers[server.Name] = server;
+                var snapshot = state.McpCapabilities?
+                    .FirstOrDefault(item => item.Name == server.Name);
                 _collector.RegisterMcpServer(new DashboardMetrics.McpServerInfo(
                     server.Name,
                     server.Endpoint.ToString(),
-                    [],
+                    snapshot?.Capabilities.ToArray() ?? [],
                     Connected: false,
-                    LastConnectedAt: null,
+                    snapshot?.LastConnectedAt,
                     LastCheckedAt: null,
-                    Error: "Not probed yet."));
+                    Error: snapshot is null
+                        ? "Not probed yet."
+                        : "Awaiting a fresh probe; showing last-known capabilities."));
             }
+        }
+
+        if (!string.Equals(loadedPath, _statePath, StringComparison.Ordinal))
+        {
+            await PersistAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -683,25 +807,49 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             DashboardRegistryState state;
             lock (_sync)
             {
+                var sourceMetrics = _collector.GetRoutingDecisionUrls()
+                    .ToDictionary(static item => item.Id, StringComparer.Ordinal);
+                var mcpMetrics = _collector.GetMcpServers()
+                    .ToDictionary(static item => item.Name, StringComparer.Ordinal);
                 state = new DashboardRegistryState(
                     [.. _sources.Values],
                     [.. _skills.Values],
-                    [.. _mcpServers.Values]);
+                    [.. _mcpServers.Values],
+                    Volatile.Read(ref _contextVersion),
+                    [
+                        .. _sourceContent.Select(item =>
+                        {
+                            sourceMetrics.TryGetValue(item.Key, out var metric);
+                            return new SourceContentSnapshot(
+                                item.Key,
+                                item.Value,
+                                metric?.LastCrawledAt ?? DateTime.UtcNow,
+                                metric?.PageCount ?? 0);
+                        }),
+                    ],
+                    [.. _remoteSkillContent.Values],
+                    [
+                        .. mcpMetrics.Values
+                            .Where(static item => item.Capabilities.Any() ||
+                                item.LastConnectedAt is not null)
+                            .Select(static item => new McpCapabilitySnapshot(
+                                item.Name,
+                                [.. item.Capabilities],
+                                item.LastConnectedAt)),
+                    ]);
             }
 
-            var directory = Path.GetDirectoryName(_statePath)!;
-            Directory.CreateDirectory(directory);
-            var temporary = _statePath + ".tmp";
-            await using (var stream = File.Create(temporary))
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+                state,
+                DashboardJsonContext.Default.DashboardRegistryState);
+            if (bytes.Length > MaxStateBytes)
             {
-                await JsonSerializer.SerializeAsync(
-                    stream,
-                    state,
-                    DashboardJsonContext.Default.DashboardRegistryState,
-                    cancellationToken).ConfigureAwait(false);
+                throw new InvalidOperationException(
+                    $"Dashboard state exceeds the {MaxStateBytes}-byte persistence limit.");
             }
 
-            File.Move(temporary, _statePath, overwrite: true);
+            cancellationToken.ThrowIfCancellationRequested();
+            ProtectedStateFile.WriteAtomic(_statePath, bytes, StateBackupCount);
         }
         finally
         {
@@ -726,7 +874,7 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     {
         if (TryGetRemoteSkillUri(skill.Path, out _))
         {
-            RemoteSkillContent? content;
+            RemoteSkillSnapshot? content;
             lock (_sync)
             {
                 _remoteSkillContent.TryGetValue(skill.Name, out content);
@@ -760,7 +908,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     private async Task<DashboardMetrics.SkillInfo> RefreshRemoteSkillAsync(
         SkillRegistration skill,
         Uri uri,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool persist = true)
     {
         try
         {
@@ -784,7 +933,8 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             var content = string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase)
                 ? ToPlainText(body)
                 : body;
-            var fetched = new RemoteSkillContent(
+            var fetched = new RemoteSkillSnapshot(
+                skill.Name,
                 content,
                 Encoding.UTF8.GetByteCount(content),
                 DateTime.UtcNow);
@@ -804,6 +954,10 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
             var metric = InspectSkill(skill);
             _collector.RegisterSkill(metric);
+            if (persist)
+            {
+                await PersistAsync(cancellationToken).ConfigureAwait(false);
+            }
             return metric;
         }
         catch (Exception ex) when (
@@ -984,14 +1138,55 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
 
-    private sealed record RemoteSkillContent(string Content, long SizeBytes, DateTime FetchedAt);
+    private static string GetDefaultStatePath()
+    {
+        var configuredDirectory = Environment.GetEnvironmentVariable("KARE_STATE_DIRECTORY");
+        var directory = string.IsNullOrWhiteSpace(configuredDirectory)
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "kare")
+            : configuredDirectory;
+        return Path.Combine(directory, "dashboard-registry.json");
+    }
+
+    private static string GetLocalSkillVersion(string path)
+    {
+        var file = new FileInfo(path);
+        return file.Exists
+            ? $"{file.Length}:{file.LastWriteTimeUtc.Ticks}"
+            : "missing";
+    }
 }
 
 /// <summary>Persisted dashboard registry.</summary>
 public sealed record DashboardRegistryState(
     List<SourceRegistration> Sources,
     List<SkillRegistration> Skills,
-    List<McpRegistration> McpServers);
+    List<McpRegistration> McpServers,
+    long ContextVersion = 0,
+    List<SourceContentSnapshot>? SourceContent = null,
+    List<RemoteSkillSnapshot>? RemoteSkillContent = null,
+    List<McpCapabilitySnapshot>? McpCapabilities = null);
+
+/// <summary>Persisted bounded authoritative-source content.</summary>
+public sealed record SourceContentSnapshot(
+    string SourceId,
+    string Content,
+    DateTime FetchedAt,
+    int PageCount);
+
+/// <summary>Persisted bounded remote-skill content.</summary>
+public sealed record RemoteSkillSnapshot(
+    string Name,
+    string Content,
+    long SizeBytes,
+    DateTime FetchedAt);
+
+/// <summary>Persisted last-known MCP capability metadata.</summary>
+public sealed record McpCapabilitySnapshot(
+    string Name,
+    List<string> Capabilities,
+    DateTime? LastConnectedAt);
 
 /// <summary>Persisted authoritative source registration.</summary>
 public sealed record SourceRegistration(

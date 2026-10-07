@@ -152,14 +152,23 @@ Keep these items on NVMe:
 
 - `/var/lib/kare/models/geniex` - GenieX model data.
 - `/var/lib/kare/runtimes/geniex` - the GenieX Linux ARM64 runtime and native libraries.
+- `/var/lib/kare/logs` - bounded rotating service logs.
+- `/var/lib/kare/cache` - bounded response and route cache snapshots.
+- `/var/lib/kare/state` - authoritative source, remote skill, context version, and MCP registration snapshots.
 
 The `kare-geniex.service` user unit uses `GENIEX_DATADIR=/var/lib/kare/models/geniex` and loads its executable and libraries from `/var/lib/kare/runtimes/geniex`. Do not move the Kare service checkout or release symlink without a separate rollback plan.
 
-Kare does not retain persistent logs, response-cache data, or backups in the NVMe layout. The bounded response cache is process-local and starts empty after restart. Do not add a database, log directory, backup directory, or cache directory to `/var/lib/kare` without an explicit retention, deletion, and recovery policy.
+Set `KARE_STATE_DIRECTORY=/var/lib/kare/state`, `KARE_LOG_DIRECTORY=/var/lib/kare/logs`, `Kare__Cache__Responses__PersistenceEnabled=true`, and `Kare__Cache__Responses__PersistencePath=/var/lib/kare/cache/responses.json` in the protected service environment. Keep these directories mode `700` and snapshot files mode `600`.
+
+Response snapshots are limited by entry count, expiration, response size, and `MaxPersistentBytes`. They store opaque SHA-256 cache keys, route IDs, eligible generated text, token counts, and timestamps. They do not store raw prompts or source code. Truncated answers, tool calls, and nondeterministic requests are not persisted. The active cache file keeps three bounded local backups by default.
+
+The dashboard registry persists configured source and skill registrations, bounded fetched content, context version, MCP registrations, and last-known MCP capabilities. It reloads that snapshot before the first network refresh. A failed refresh keeps the stale last-known content available and records the failure.
+
+These `.bak1` through `.bak3` files are local rollback snapshots, not disaster recovery. Do not describe them as off-device backups. PostgreSQL, pgvector, encrypted remote archives, and cloud restore remain later work.
 
 The drive currently negotiates PCIe Gen4 x1 even though the root port advertises x4. Record that fact in performance notes and do not describe the storage path as a full Gen4 x4 path until firmware, device tree, kernel, and physical seating checks explain it.
 
-Verbose Kare service logs live on eMMC under `%h/.local/state/kare/logs`, not NVMe. Set `KARE_LOG_DIRECTORY` to that absolute path and `Logging__LogLevel__Default=Debug` in the protected service environment. Kare rolls files at 25 MiB and retains no more than 250 MiB by default. `KARE_LOG_FILE_BYTES` and `KARE_LOG_TOTAL_BYTES` may lower those limits.
+Verbose Kare service logs live on NVMe under `/var/lib/kare/logs`. Set `KARE_LOG_DIRECTORY` to that absolute path and `Logging__LogLevel__Default=Debug` in the protected service environment. Kare rolls files at 25 MiB and retains no more than 250 MiB by default. `KARE_LOG_FILE_BYTES` and `KARE_LOG_TOTAL_BYTES` may lower those limits.
 
 ## Copilot integration
 
@@ -197,7 +206,7 @@ Use hooks and policy for redaction, route metadata, cache fingerprints, and acco
 
 The service exposes the operations dashboard at `/dashboard`. Open `http://127.0.0.1:5285/dashboard` on the device, or forward port `5285` through SSH and open the forwarded local address in a browser. The dashboard is local by default. Do not make it non-loopback until authentication, request limits, and an explicit trusted CIDR allow-list are configured.
 
-The dashboard is for metadata Kare already owns. It must not display or persist prompt text, source code, generated responses, credentials, provider tokens, or protected configuration.
+The dashboard is for metadata Kare already owns. It must not display prompt text, source code, generated responses, credentials, provider tokens, or protected configuration. The separate protected response-cache snapshot may retain eligible generated text under the bounded cache policy above.
 
 The dashboard may show:
 
@@ -209,7 +218,7 @@ The dashboard may show:
 - Skills loaded from explicit device paths or public HTTPS URLs.
 - Configured Streamable HTTP MCP servers, advertised capabilities, connection state, and last connection time.
 
-Dashboard state stays bounded and process-local until the persistence design is complete. Repository defaults remain loopback-only. Non-loopback access requires explicit enablement and a trusted CIDR allow-list. The OpenAI-compatible API remains bearer-authenticated.
+Dashboard metrics remain process-local. The bounded knowledge registry is restart-safe on NVMe. Repository defaults remain loopback-only. Non-loopback access requires explicit enablement and a trusted CIDR allow-list. The OpenAI-compatible API remains bearer-authenticated.
 
 The dashboard registry must not scan arbitrary home directories or import GitHub Copilot settings. Remote sources and skills need fixed page, byte, refresh, and injected-context limits.
 

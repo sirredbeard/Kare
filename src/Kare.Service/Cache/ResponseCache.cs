@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Kare.Abstractions;
 using Kare.Service.Dashboard;
 using Kare.Service.Options;
+using Kare.Service.Storage;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
@@ -10,34 +12,42 @@ using Microsoft.Extensions.Options;
 namespace Kare.Service.Cache;
 
 /// <summary>
-/// Bounded memory-only cache for deterministic, non-tool completions. Keys contain hashes,
-/// not prompt text, and entries disappear on process restart.
+/// Bounded cache for deterministic, non-tool completions. Keys contain hashes, not prompt
+/// text. Protected persistence is optional and stores only eligible response text or route IDs.
 /// </summary>
 public sealed class ResponseCache : IDisposable
 {
     private const string CacheVersion = "kare-response-v1";
     private const string CascadeCacheVersion = "kare-cascade-route-v1";
+    private const string ResponseKind = "response";
+    private const string CascadeKind = "cascade";
     private readonly ResponseCacheOptions _options;
     private readonly MemoryCache _cache;
     private readonly IDashboardMetricsCollector? _dashboard;
     private readonly IDashboardKnowledgeService? _knowledge;
+    private readonly ILogger<ResponseCache>? _logger;
     private readonly Lock _keysSync = new();
     private readonly HashSet<string> _keys = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PersistentCacheEntry> _persistentEntries =
+        new(StringComparer.Ordinal);
 
     /// <summary>Creates the cache.</summary>
     public ResponseCache(
         IOptions<ResponseCacheOptions> options,
         IDashboardMetricsCollector? dashboard = null,
-        IDashboardKnowledgeService? knowledge = null)
+        IDashboardKnowledgeService? knowledge = null,
+        ILogger<ResponseCache>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value;
         _dashboard = dashboard;
         _knowledge = knowledge;
+        _logger = logger;
         _cache = new MemoryCache(new MemoryCacheOptions
         {
             SizeLimit = _options.MaxEntries,
         });
+        LoadPersistentEntries();
     }
 
     /// <summary>Gets an eligible cached response.</summary>
@@ -55,12 +65,7 @@ public sealed class ResponseCache : IDisposable
 
         if (!_cache.TryGetValue(key, out response))
         {
-            lock (_keysSync)
-            {
-                _keys.Remove(key);
-            }
-
-            _dashboard?.RemoveCacheEntry(key);
+            RemoveMissingEntry(key);
             return false;
         }
 
@@ -83,24 +88,37 @@ public sealed class ResponseCache : IDisposable
         ArgumentNullException.ThrowIfNull(response);
 
         if (!TryCreateKey(messages, options, streaming, out var key) ||
+            response.FinishReason == ChatFinishReason.Length ||
             CountText(response) > _options.MaxResponseCharacters)
         {
             return;
         }
 
+        var now = DateTime.UtcNow;
+        var expiresAt = now.AddSeconds(_options.EntryLifetimeSeconds);
         _cache.Set(
             key,
             response,
             new MemoryCacheEntryOptions
             {
-                AbsoluteExpirationRelativeToNow =
-                    TimeSpan.FromSeconds(_options.EntryLifetimeSeconds),
+                AbsoluteExpiration = expiresAt,
                 Size = 1,
             });
 
         lock (_keysSync)
         {
             _keys.Add(key);
+            _persistentEntries[key] = new PersistentCacheEntry(
+                key,
+                ResponseKind,
+                response.Text,
+                Target: null,
+                now,
+                expiresAt,
+                response.Usage?.InputTokenCount,
+                response.Usage?.OutputTokenCount,
+                response.Usage?.TotalTokenCount);
+            PersistLocked();
         }
 
         _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
@@ -123,6 +141,11 @@ public sealed class ResponseCache : IDisposable
             !_cache.TryGetValue(key, out string? cachedTarget) ||
             string.IsNullOrWhiteSpace(cachedTarget))
         {
+            if (!string.IsNullOrEmpty(key))
+            {
+                RemoveMissingEntry(key);
+            }
+
             return false;
         }
 
@@ -149,19 +172,31 @@ public sealed class ResponseCache : IDisposable
             return;
         }
 
+        var now = DateTime.UtcNow;
+        var expiresAt = now.AddSeconds(_options.EntryLifetimeSeconds);
         _cache.Set(
             key,
             target,
             new MemoryCacheEntryOptions
             {
-                AbsoluteExpirationRelativeToNow =
-                    TimeSpan.FromSeconds(_options.EntryLifetimeSeconds),
+                AbsoluteExpiration = expiresAt,
                 Size = 1,
             });
 
         lock (_keysSync)
         {
             _keys.Add(key);
+            _persistentEntries[key] = new PersistentCacheEntry(
+                key,
+                CascadeKind,
+                Text: null,
+                target,
+                now,
+                expiresAt,
+                InputTokens: null,
+                OutputTokens: null,
+                TotalTokens: null);
+            PersistLocked();
         }
 
         _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
@@ -180,6 +215,8 @@ public sealed class ResponseCache : IDisposable
         lock (_keysSync)
         {
             _keys.Remove(key);
+            _persistentEntries.Remove(key);
+            PersistLocked();
         }
 
         _dashboard?.RemoveCacheEntry(key);
@@ -193,6 +230,8 @@ public sealed class ResponseCache : IDisposable
         {
             keys = [.. _keys];
             _keys.Clear();
+            _persistentEntries.Clear();
+            PersistLocked();
         }
 
         foreach (var key in keys)
@@ -204,6 +243,186 @@ public sealed class ResponseCache : IDisposable
 
     /// <inheritdoc />
     public void Dispose() => _cache.Dispose();
+
+    private void LoadPersistentEntries()
+    {
+        if (!_options.Enabled || !_options.PersistenceEnabled)
+        {
+            return;
+        }
+
+        PersistentCacheState? state = null;
+        Exception? lastError = null;
+        string? loadedPath = null;
+        var candidates = new[] { _options.PersistencePath }
+            .Concat(Enumerable.Range(1, _options.BackupCount)
+                .Select(index => $"{_options.PersistencePath}.bak{index}"));
+        foreach (var candidate in candidates.Where(File.Exists))
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(candidate);
+                if (bytes.LongLength > _options.MaxPersistentBytes)
+                {
+                    throw new InvalidDataException(
+                        $"Persistent response cache exceeds {_options.MaxPersistentBytes} bytes.");
+                }
+
+                state = JsonSerializer.Deserialize(
+                    bytes,
+                    CacheJsonContext.Default.PersistentCacheState)
+                    ?? throw new InvalidDataException("Persistent response cache is empty.");
+                loadedPath = candidate;
+                break;
+            }
+            catch (Exception ex) when (ex is IOException or JsonException or InvalidDataException)
+            {
+                lastError = ex;
+                _logger?.LogError(ex, "Failed to load response-cache snapshot {CachePath}.", candidate);
+            }
+        }
+
+        if (state is null)
+        {
+            if (lastError is not null)
+            {
+                throw new InvalidDataException(
+                    "No valid response-cache snapshot or backup could be loaded.",
+                    lastError);
+            }
+
+            return;
+        }
+
+        if (!string.Equals(loadedPath, _options.PersistencePath, StringComparison.Ordinal))
+        {
+            _logger?.LogWarning(
+                "Recovered response cache from backup snapshot {CachePath}.",
+                loadedPath);
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var entry in state.Entries
+            .Where(item => item.ExpiresAt > now)
+            .OrderByDescending(static item => item.CreatedAt)
+            .Take(_options.MaxEntries))
+        {
+            object value;
+            if (entry.Kind == ResponseKind && entry.Text is not null)
+            {
+                value = new ChatResponse(new ChatMessage(ChatRole.Assistant, entry.Text))
+                {
+                    FinishReason = ChatFinishReason.Stop,
+                    Usage = new UsageDetails
+                    {
+                        InputTokenCount = entry.InputTokens,
+                        OutputTokenCount = entry.OutputTokens,
+                        TotalTokenCount = entry.TotalTokens,
+                    },
+                };
+            }
+            else if (entry.Kind == CascadeKind && !string.IsNullOrWhiteSpace(entry.Target))
+            {
+                value = entry.Target;
+            }
+            else
+            {
+                continue;
+            }
+
+            _cache.Set(
+                entry.Key,
+                value,
+                new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpiration = entry.ExpiresAt,
+                    Size = 1,
+                });
+            _keys.Add(entry.Key);
+            _persistentEntries[entry.Key] = entry;
+            _dashboard?.RecordCacheEntry(new DashboardMetrics.CacheEntry(
+                entry.Key,
+                entry.CreatedAt,
+                LastAccessedAt: null,
+                entry.Text is null
+                    ? Encoding.UTF8.GetByteCount(entry.Target!)
+                    : Encoding.UTF8.GetByteCount(entry.Text),
+                entry.Kind == CascadeKind
+                    ? "application/vnd.kare.cascade-route"
+                    : "application/json"));
+        }
+
+        PersistLocked();
+    }
+
+    private void RemoveMissingEntry(string key)
+    {
+        lock (_keysSync)
+        {
+            var changed = _keys.Remove(key) | _persistentEntries.Remove(key);
+            if (changed)
+            {
+                PersistLocked();
+            }
+        }
+
+        _dashboard?.RemoveCacheEntry(key);
+    }
+
+    private void PersistLocked()
+    {
+        if (!_options.PersistenceEnabled)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var expired in _persistentEntries.Values
+            .Where(entry => entry.ExpiresAt <= now)
+            .Select(static entry => entry.Key)
+            .ToArray())
+        {
+            _persistentEntries.Remove(expired);
+            _keys.Remove(expired);
+            _cache.Remove(expired);
+            _dashboard?.RemoveCacheEntry(expired);
+        }
+
+        while (_persistentEntries.Count > _options.MaxEntries)
+        {
+            RemoveOldestPersistentEntry();
+        }
+
+        byte[] bytes;
+        while (true)
+        {
+            var state = new PersistentCacheState(
+                [.. _persistentEntries.Values.OrderByDescending(static entry => entry.CreatedAt)]);
+            bytes = JsonSerializer.SerializeToUtf8Bytes(
+                state,
+                CacheJsonContext.Default.PersistentCacheState);
+            if (bytes.LongLength <= _options.MaxPersistentBytes || _persistentEntries.Count == 0)
+            {
+                break;
+            }
+
+            RemoveOldestPersistentEntry();
+        }
+
+        ProtectedStateFile.WriteAtomic(
+            _options.PersistencePath,
+            bytes,
+            _options.BackupCount);
+    }
+
+    private void RemoveOldestPersistentEntry()
+    {
+        var oldest = _persistentEntries.Values.MinBy(static entry => entry.CreatedAt)!;
+        _persistentEntries.Remove(oldest.Key);
+        _keys.Remove(oldest.Key);
+        _cache.Remove(oldest.Key);
+        _dashboard?.RemoveCacheEntry(oldest.Key);
+    }
 
     private bool TryCreateKey(
         IReadOnlyList<ChatMessage> messages,
