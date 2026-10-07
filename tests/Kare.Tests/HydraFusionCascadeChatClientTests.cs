@@ -98,6 +98,35 @@ public sealed class HydraFusionCascadeChatClientTests
     }
 
     [Fact]
+    public async Task ResultJudgeRejectsDraftAndUsesOneRepairTarget()
+    {
+        var localCalls = 0;
+        var local = new ScriptedChatClient((_, _) =>
+        {
+            localCalls++;
+            return new ChatResponse(
+                new ChatMessage(
+                    ChatRole.Assistant,
+                    localCalls == 1
+                        ? "KARE_ESCALATE:fast"
+                        : localCalls == 2
+                            ? "KARE_REPAIR:incomplete"
+                            : "KARE_ACCEPT"));
+        });
+        var cloud = new ScriptedCloudBackend();
+        using var cache = CreateCache();
+        using var client = CreateClient(local, cloud, cache, enableResultJudge: true);
+
+        var response = await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Review this design.")],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("cloud-no-tools", response.Text);
+        Assert.Equal(["fast", "no-tools"], cloud.ModelsCalled);
+        Assert.Equal(3, local.CallCount);
+    }
+
+    [Fact]
     public async Task CachedTargetSkipsRepeatedLocalGate()
     {
         var local = new ScriptedChatClient((_, _) =>
@@ -222,7 +251,8 @@ public sealed class HydraFusionCascadeChatClientTests
         IChatClient local,
         ICloudInferenceBackend cloud,
         ResponseCache cache,
-        CascadeRouteContext? routeContext = null) =>
+        CascadeRouteContext? routeContext = null,
+        bool enableResultJudge = false) =>
         new(
             local,
             cloud,
@@ -260,6 +290,7 @@ public sealed class HydraFusionCascadeChatClientTests
                 EnableCascadeEscalation = true,
                 CascadeDecisionMaxInputCharacters = 2_000,
                 CascadeDecisionMaxOutputTokens = 64,
+                EnableCascadeResultJudge = enableResultJudge,
             }),
             BackendKind.GenieXQairt,
             "qwen",

@@ -59,6 +59,12 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
     private const int MaxSourceCharacters = 256 * 1024;
     private const int MaxSkillBytes = 256 * 1024;
     private const int MaxInjectedCharacters = 12_000;
+    private const int SourceContextBudget = 6_000;
+    private const int SkillContextBudget = 4_500;
+    private const int McpContextBudget = 1_500;
+    private const int MaxSelectedSkills = 3;
+    private const int MaxSelectedSources = 5;
+    private const int MaxSelectedMcpServers = 5;
     private const int MaxStateBytes = 48 * 1024 * 1024;
     private const int StateBackupCount = 3;
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(15);
@@ -304,7 +310,15 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(messages);
-        var contentBuffer = new StringBuilder(MaxInjectedCharacters);
+        var requestText = string.Join(
+            "\n",
+            messages
+                .Where(static message =>
+                    message.Role == ChatRole.User ||
+                    message.Role == ChatRole.System)
+                .SelectMany(static message => message.Contents.OfType<TextContent>())
+                .Select(static content => content.Text));
+        var requestTerms = Tokenize(requestText);
 
         SourceRegistration[] sources;
         SkillRegistration[] skills;
@@ -321,7 +335,14 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 .OrderBy(static server => server.Name, StringComparer.Ordinal),
         ];
 
-        foreach (var source in sources)
+        var selectedSources = SelectSources(sources, requestTerms);
+        var selectedSkills = SelectSkills(skills, requestTerms);
+        var selectedMcpServers = SelectMcpServers(mcpServers, requestTerms);
+        var sourceContext = new StringBuilder(SourceContextBudget);
+        var skillContext = new StringBuilder(SkillContextBudget);
+        var mcpContext = new StringBuilder(McpContextBudget);
+
+        foreach (var source in selectedSources)
         {
             string? sourceContent;
             lock (_sync)
@@ -329,10 +350,10 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 _sourceContent.TryGetValue(source.Id, out sourceContent);
             }
 
-            AppendBounded(contentBuffer, sourceContent, MaxInjectedCharacters);
+            AppendRelevantSource(sourceContext, source, sourceContent, requestTerms);
         }
 
-        foreach (var skill in skills)
+        foreach (var skill in selectedSkills)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var metric = InspectSkill(skill);
@@ -359,19 +380,24 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
             }
 
             AppendBounded(
-                contentBuffer,
+                skillContext,
                 $"\nSkill: {skill.Name}\nLocation: {skill.Path}\n{skillContent}\n",
-                MaxInjectedCharacters);
+                SkillContextBudget);
         }
 
-        foreach (var server in mcpServers)
+        foreach (var server in selectedMcpServers)
         {
             AppendBounded(
-                contentBuffer,
+                mcpContext,
                 $"\nConnected MCP server: {server.Name}\n" +
                 $"Capabilities: {string.Join(", ", server.Capabilities)}\n",
-                MaxInjectedCharacters);
+                McpContextBudget);
         }
+
+        var contentBuffer = new StringBuilder(MaxInjectedCharacters);
+        AppendBounded(contentBuffer, sourceContext.ToString(), SourceContextBudget);
+        AppendBounded(contentBuffer, skillContext.ToString(), SkillContextBudget);
+        AppendBounded(contentBuffer, mcpContext.ToString(), McpContextBudget);
 
         if (contentBuffer.Length == 0)
         {
@@ -399,6 +425,162 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
 
         return [new ChatMessage(ChatRole.System, context.ToString()), .. messages];
     }
+
+    private SourceRegistration[] SelectSources(
+        IReadOnlyList<SourceRegistration> sources,
+        IReadOnlySet<string> requestTerms)
+    {
+        var scored = new List<(SourceRegistration Source, int Score)>(sources.Count);
+        foreach (var source in sources)
+        {
+            string? content;
+            lock (_sync)
+            {
+                _sourceContent.TryGetValue(source.Id, out content);
+            }
+
+            var score = ScoreText(
+                requestTerms,
+                $"{source.Pattern} {content}");
+            if (score > 0)
+            {
+                scored.Add((source, score));
+            }
+        }
+
+        return SelectWithFallback(
+            scored,
+            sources,
+            static item => item.Item,
+            MaxSelectedSources);
+    }
+
+    private static SkillRegistration[] SelectSkills(
+        IReadOnlyList<SkillRegistration> skills,
+        IReadOnlySet<string> requestTerms)
+    {
+        var scored = skills
+            .Select(skill => (
+                Skill: skill,
+                Score: ScoreText(
+                    requestTerms,
+                    $"{skill.Name} {skill.Description} {skill.Path}")))
+            .Where(static item => item.Score > 0)
+            .ToArray();
+
+        return SelectWithFallback(
+            scored,
+            skills,
+            static item => item.Item,
+            MaxSelectedSkills);
+    }
+
+    private static DashboardMetrics.McpServerInfo[] SelectMcpServers(
+        IReadOnlyList<DashboardMetrics.McpServerInfo> servers,
+        IReadOnlySet<string> requestTerms)
+    {
+        var scored = servers
+            .Select(server => (
+                Server: server,
+                Score: ScoreText(
+                    requestTerms,
+                    $"{server.Name} {string.Join(' ', server.Capabilities)}")))
+            .Where(static item => item.Score > 0)
+            .ToArray();
+
+        return SelectWithFallback(
+            scored,
+            servers,
+            static item => item.Item,
+            MaxSelectedMcpServers);
+    }
+
+    private static T[] SelectWithFallback<T, TItem>(
+        IEnumerable<(TItem Item, int Score)> scored,
+        IReadOnlyList<T> all,
+        Func<(TItem Item, int Score), T> selector,
+        int maximum)
+    {
+        var selected = scored
+            .OrderByDescending(static item => item.Score)
+            .ThenBy(static item => item.Item?.ToString(), StringComparer.Ordinal)
+            .Take(maximum)
+            .Select(selector)
+            .ToArray();
+        if (selected.Length > 0)
+        {
+            return selected;
+        }
+
+        return all
+            .Take(maximum)
+            .ToArray();
+    }
+
+    private static void AppendRelevantSource(
+        StringBuilder destination,
+        SourceRegistration source,
+        string? content,
+        IReadOnlySet<string> requestTerms)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return;
+        }
+
+        var relevant = FindRelevantExcerpt(content, requestTerms, SourceContextBudget);
+        AppendBounded(
+            destination,
+            $"\nSource URL: {source.Pattern}\n{relevant}\n",
+            SourceContextBudget);
+    }
+
+    private static string FindRelevantExcerpt(
+        string content,
+        IReadOnlySet<string> requestTerms,
+        int maximumCharacters)
+    {
+        if (requestTerms.Count == 0 || content.Length <= maximumCharacters)
+        {
+            return content;
+        }
+
+        var lines = content.Split('\n');
+        var selected = lines
+            .Select((line, index) => (Line: line, Index: index, Score: ScoreText(requestTerms, line)))
+            .Where(static item => item.Score > 0)
+            .OrderByDescending(static item => item.Score)
+            .ThenBy(static item => item.Index)
+            .Take(20)
+            .OrderBy(static item => item.Index)
+            .Select(static item => item.Line);
+        var excerpt = string.Join('\n', selected);
+        return string.IsNullOrWhiteSpace(excerpt)
+            ? content[..Math.Min(content.Length, maximumCharacters)]
+            : excerpt[..Math.Min(excerpt.Length, maximumCharacters)];
+    }
+
+    private static int ScoreText(
+        IReadOnlySet<string> requestTerms,
+        string? candidate)
+    {
+        if (requestTerms.Count == 0 || string.IsNullOrWhiteSpace(candidate))
+        {
+            return 0;
+        }
+
+        var candidateTerms = Tokenize(candidate);
+        return requestTerms.Count(term => candidateTerms.Contains(term));
+    }
+
+    private static HashSet<string> Tokenize(string value) =>
+        value
+            .Split(
+                [' ', '\t', '\r', '\n', '/', '\\', '.', ':', ',', ';', '(', ')', '[', ']', '{', '}', '-', '_'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(static term => term.ToLowerInvariant())
+            .Where(static term => term.Length >= 3)
+            .ToHashSet(StringComparer.Ordinal);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

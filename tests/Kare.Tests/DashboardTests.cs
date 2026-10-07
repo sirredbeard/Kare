@@ -191,6 +191,69 @@ public sealed class DashboardTests
     }
 
     [Fact]
+    public async Task LocalContextLoadsOnlyRelevantSkillBodies()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "kare-dashboard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var relevantPath = Path.Combine(directory, "runtime.md");
+        var unrelatedPath = Path.Combine(directory, "database.md");
+        var statePath = Path.Combine(directory, "registry.json");
+        await File.WriteAllTextAsync(
+            relevantPath,
+            "Use the measured GenieX runtime on the device.",
+            TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            unrelatedPath,
+            "Use PostgreSQL migrations for persistence.",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var service = new DashboardKnowledgeService(
+                new InMemoryMetricsCollector(),
+                new StaticHttpClientFactory(),
+                NullLogger<DashboardKnowledgeService>.Instance,
+                statePath);
+            await service.AddSkillAsync(
+                new CreateDashboardSkillRequest(
+                    "device-runtime",
+                    relevantPath,
+                    "GenieX device runtime",
+                    Enabled: true),
+                TestContext.Current.CancellationToken);
+            await service.AddSkillAsync(
+                new CreateDashboardSkillRequest(
+                    "database",
+                    unrelatedPath,
+                    "PostgreSQL persistence",
+                    Enabled: true),
+                TestContext.Current.CancellationToken);
+
+            var enriched = await service.AddLocalContextAsync(
+                [new ChatMessage(ChatRole.User, "Which GenieX runtime should I use?")],
+                TestContext.Current.CancellationToken);
+            var context = enriched[0].Contents.OfType<TextContent>().Single().Text;
+
+            Assert.Contains("Use the measured GenieX runtime", context, StringComparison.Ordinal);
+            Assert.DoesNotContain("Use PostgreSQL migrations", context, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(statePath))
+            {
+                File.Delete(statePath);
+            }
+
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task EnabledHttpsSkillIsFetchedAndInjectedIntoLocalContext()
     {
         var directory = Path.Combine(Path.GetTempPath(), "kare-dashboard-" + Guid.NewGuid().ToString("N"));

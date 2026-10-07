@@ -17,6 +17,10 @@ namespace Kare.Service.Cache;
 /// </summary>
 public sealed class ResponseCache : IDisposable
 {
+    public const string RepositoryFingerprintOptionName = "kare.repository.fingerprint";
+    public const string ContextFingerprintOptionName = "kare.context.fingerprint";
+    public const string RoutePolicyVersionOptionName = "kare.route-policy.version";
+
     private const string CacheVersion = "kare-response-v1";
     private const string CascadeCacheVersion = "kare-cascade-route-v1";
     private const string ResponseKind = "response";
@@ -447,6 +451,9 @@ public sealed class ResponseCache : IDisposable
         Append(hash, options.TopP);
         Append(hash, options.Seed);
         Append(hash, options.MaxOutputTokens);
+        AppendFingerprint(hash, options, RepositoryFingerprintOptionName);
+        AppendFingerprint(hash, options, ContextFingerprintOptionName);
+        AppendFingerprint(hash, options, RoutePolicyVersionOptionName);
 
         foreach (var stop in options.StopSequences ?? [])
         {
@@ -493,6 +500,9 @@ public sealed class ResponseCache : IDisposable
         Append(hash, _knowledge?.ContextVersion);
         Append(hash, options?.MaxOutputTokens);
         Append(hash, options?.ToolMode);
+        AppendFingerprint(hash, options, RepositoryFingerprintOptionName);
+        AppendFingerprint(hash, options, ContextFingerprintOptionName);
+        AppendFingerprint(hash, options, RoutePolicyVersionOptionName);
 
         foreach (var candidate in candidates)
         {
@@ -562,5 +572,17 @@ public sealed class ResponseCache : IDisposable
         var bytes = Encoding.UTF8.GetBytes(text);
         hash.AppendData(BitConverter.GetBytes(bytes.Length));
         hash.AppendData(bytes);
+    }
+
+    private static void AppendFingerprint(
+        IncrementalHash hash,
+        ChatOptions? options,
+        string name)
+    {
+        var value = options?.AdditionalProperties?.TryGetValue(name, out var raw) == true
+            ? raw?.ToString()
+            : null;
+        Append(hash, name);
+        Append(hash, value);
     }
 }

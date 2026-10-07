@@ -121,6 +121,32 @@ public sealed class ResponseCacheTests
     }
 
     [Fact]
+    public void RepositoryFingerprintInvalidatesResponse()
+    {
+        using var cache = CreateCache();
+        var messages = new[] { new ChatMessage(ChatRole.User, "hello") };
+        var firstOptions = new ChatOptions
+        {
+            ModelId = "kare-local",
+            Temperature = 0,
+            AdditionalProperties = new()
+            {
+                [ResponseCache.RepositoryFingerprintOptionName] = "revision-a",
+            },
+        };
+        var secondOptions = firstOptions.Clone();
+        secondOptions.AdditionalProperties![ResponseCache.RepositoryFingerprintOptionName] = "revision-b";
+
+        cache.Set(
+            messages,
+            firstOptions,
+            streaming: false,
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "cached")));
+
+        Assert.False(cache.TryGet(messages, secondOptions, streaming: false, out _));
+    }
+
+    [Fact]
     public void EligibleResponseSurvivesRestartInProtectedSnapshot()
     {
         var directory = Path.Combine(

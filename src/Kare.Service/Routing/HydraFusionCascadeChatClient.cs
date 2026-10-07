@@ -344,6 +344,19 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 var response = await recording
                     .GetResponseAsync(messages, CloudOptions(options, candidate), cancellationToken)
                     .ConfigureAwait(false);
+                if (!await ShouldAcceptDraftAsync(
+                        messages,
+                        response,
+                        candidate,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    lastError = new CloudInferenceException(
+                        $"The local result judge rejected cloud target {candidate.Id}.");
+                    reason = $"The local result judge rejected {candidate.Id}; trying the next configured model.";
+                    continue;
+                }
+
                 return response;
             }
             catch (Exception ex) when (
@@ -357,6 +370,93 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         }
 
         throw lastError ?? new NoBackendAvailableException("No configured cloud cascade target is available.");
+    }
+
+    private async Task<bool> ShouldAcceptDraftAsync(
+        IReadOnlyList<ChatMessage> request,
+        ChatResponse response,
+        CloudModelDescriptor candidate,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.EnableCascadeResultJudge)
+        {
+            return true;
+        }
+
+        if (response.FinishReason == ChatFinishReason.Length)
+        {
+            return false;
+        }
+
+        if (response.Messages.Any(message =>
+                message.Contents.Any(content =>
+                    content is FunctionCallContent or FunctionResultContent)))
+        {
+            return true;
+        }
+
+        var draft = GetText(response);
+        if (string.IsNullOrWhiteSpace(draft))
+        {
+            return false;
+        }
+
+        var requestText = GetLastUserText(request);
+        if (requestText.Length > _options.CascadeDecisionMaxInputCharacters)
+        {
+            requestText = requestText[^_options.CascadeDecisionMaxInputCharacters..];
+        }
+
+        var draftText = draft.Length > _options.CascadeDecisionMaxInputCharacters
+            ? draft[.._options.CascadeDecisionMaxInputCharacters]
+            : draft;
+        var judgeMessages = new[]
+        {
+            new ChatMessage(
+                ChatRole.System,
+                """
+                You are Kare's bounded local result judge. Review only the compact request and draft.
+                Return exactly KARE_ACCEPT or KARE_REPAIR:<reason>.
+                Accept a complete, directly useful answer. Request repair for an incomplete, uncertain,
+                unsupported, or obviously irrelevant answer. Do not provide advice or rewrite the answer.
+                """),
+            new ChatMessage(
+                ChatRole.User,
+                $"Request:\n{requestText}\n\nDraft from {candidate.ModelId}:\n{draftText}"),
+        };
+        var judgeOptions = new ChatOptions
+        {
+            ModelId = _localModelId,
+            Temperature = 0,
+            MaxOutputTokens = _options.CascadeJudgeMaxOutputTokens,
+            ToolMode = ChatToolMode.None,
+            AdditionalProperties = new()
+            {
+                [GenieXBackend.DisableThinkingOptionName] = true,
+                [ContextEnrichingChatClient.SkipKnowledgeContextOptionName] = true,
+            },
+        };
+
+        try
+        {
+            var judge = await CreateRecordingClient(
+                    _local,
+                    LocalDecision($"Judging the draft returned by {candidate.Id}."))
+                .GetResponseAsync(judgeMessages, judgeOptions, cancellationToken)
+                .ConfigureAwait(false);
+            var verdict = GetText(judge).Trim();
+            return verdict.StartsWith("KARE_ACCEPT", StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (
+            ex is PromptTooLargeException or LocalInferenceException or
+                UnsupportedBackendCapabilityException or InferenceCapacityException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Local result judge failed for cloud target {Target}; rejecting the draft.",
+                candidate.Id);
+            return false;
+        }
     }
 
     private async IAsyncEnumerable<ChatResponseUpdate> StreamCloudCascadeAsync(
