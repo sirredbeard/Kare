@@ -102,7 +102,7 @@ du -sh /var/lib/kare/models /var/lib/kare/runtimes
 - An operations dashboard for routes, latency, cache metadata, skills, sources, and MCP status.
 - The cross-platform `copilot-kare` launcher.
 
-The main open problem is context. The next device experiment is a small GenieX GGUF model with an 8192-token context. It still has to pass tool-call, quality, latency, memory, and thermal checks.
+The first context problem is solved. Qwen3.5 0.8B Q4_0 now runs through GenieX with a measured 24576-token window, enough for Copilot CLI 1.0.92 to load all 26 tools, repository instructions, and the builtin GitHub MCP server. The model still has to pass representative coding quality, sustained latency, and thermal checks.
 
 ## Build the server for the Arduino
 
@@ -161,6 +161,20 @@ After the first healthy connection, the launcher remembers the last working addr
 ```
 
 `copilot-kare` opens the SSH tunnel, waits for Kare, supplies the Copilot BYOK environment, starts GitHub Copilot CLI, and cleans up the tunnel when Copilot exits.
+
+The board runs Qwen3.5 0.8B Q4_0 through GenieX with a 24576-token context. `copilot-kare` advertises 23552 prompt tokens and reserves 1024 output tokens, which fits Copilot CLI 1.0.92 with all 26 tools, repository instructions, and the builtin GitHub MCP server enabled.
+
+A full test prompt completed through Kare in 43 seconds with 22.9k input tokens. Kare limits the local cascade decision to the last 1024 request characters and 32 output tokens so Copilot's static wrapper does not spend two minutes in the routing gate.
+
+Use `--kare-minimal-context` for the earlier offline diagnostic profile. It disables builtin MCP servers and repository instructions, exposes only `bash`, advertises 7936 prompt tokens, and reserves 256 output tokens.
+
+Capture Copilot CLI debug logs in protected local storage with:
+
+```bash
+copilot-kare --kare-verbose -p "Test Kare"
+```
+
+The launcher prints the log directory. Use `--kare-log-dir PATH` when you need a specific protected location.
 
 ## Operations dashboard
 

@@ -117,11 +117,11 @@ These are the working findings after reviewing the public Qualcomm, Arduino, ONN
 
 8. Cache safety: the project should cache only deterministic, policy-safe calls. The right cache keys include model and provider, system instructions, normalized user request, repository identity and revision, relevant file hashes, permission policy, and tokenizer/model version. A response should not be cached only by raw prompt text. For code generation, the cache should be conservative: default to short-lived cache records, repository-hash validation, and stale-context warnings or local revalidation before returning a patch. Do not assume a code answer is safe to reuse just because the prompt text is similar.
 
-9. Available context on the board: the first QAIRT result is closed. The Qwen3 1.7B bundle is compiled for 4096 tokens, and Qualcomm documents that a QAIRT bundle's context cannot be raised at runtime. Sliding window eviction does not help when Copilot CLI's initial static prompt is already larger than the bundle. No larger-context QCS8275 QAIRT bundle was verified in the public catalogue on 2026-10-03. GenieX's GGUF path can raise `--nctx` up to the model's trained maximum, so the next experiment is a small supported GGUF model at 8192 tokens through the llama.cpp HTP path. It must pass the same tool-call, quality, latency, memory, and thermal gates before replacing the QAIRT default.
+9. Available context on the board: the first QAIRT result is closed. The Qwen3 1.7B bundle is compiled for 4096 tokens, and Qualcomm documents that a QAIRT bundle's context cannot be raised at runtime. The GGUF path is different. Qwen3.5 0.8B Q4_0 started with `--nctx 24576`, held about 11 GiB of system memory available, and completed a full Copilot CLI 1.0.92 request with all 26 tools, repository instructions, and the builtin GitHub MCP server. The 32768-token test started but a representative cascade decision did not finish within 110 seconds, so 24576 is the measured working limit for now.
 
 10. Thermal and power behavior: also unknown until measured. The board has a large heat sink and a power budget that can likely be used aggressively, but the public docs do not give a measured sustained-generation profile for coding models. The first benchmark should run the model for a sustained interval, record first-token latency, steady-state tokens per second, total latency, temperature, throttling, and system power if available, and only then set the real runtime policy. The board should be configured to maximize useful local work, but not by blindly pushing the board until it throttles or fails.
 
-The main conclusion is narrower now: Qualcomm acceleration on QCS8275 works, but the measured QAIRT model cannot host Copilot CLI because its compiled context is too small. The next local-client proof is a small GenieX GGUF model with an 8192-token context. The ONNX CPU path remains useful for plain local prompts, but it must reject tool-bearing requests because the current .NET client ignores tools.
+The main conclusion changed after the 2026-10-07 device test: the full Copilot CLI 1.0.92 surface fits at 24576 tokens. The launcher advertises 23552 prompt tokens and reserves 1024 output tokens. A full request completed in 43 seconds with 22.9k input tokens. The cascade gate must stay smaller than the caller prompt. Limiting it to the final 1024 request characters and 32 output tokens removed a measured two-minute routing stall. The ONNX CPU path remains useful for plain local prompts, but it must reject tool-bearing requests because the current .NET client ignores tools.
 
 ## Technology choices
 
@@ -526,6 +526,12 @@ The remaining storage work is narrow:
 
 NVMe should improve model startup and model switching. It will not change GenieX token latency after the model is resident in memory. Measure first-token latency separately from storage latency.
 
+### Diagnostic logging
+
+The launcher can capture Copilot CLI debug logs under protected local configuration. The logs show tool count, MCP initialization, model resolution, and `compaction_static_context_pressure` without requiring changes to Kare.
+
+The Kare service supports an optional rotating file logger for device iteration. Keep it on eMMC under the user's local state directory, roll at 25 MiB, and cap retained files at 250 MiB. Verbose logging is an explicit protected deployment setting. Do not log prompts, source code, responses, credentials, or provider tokens.
+
 Use separate records for:
 
 - Session and turn identity
@@ -610,7 +616,7 @@ Progress as of 2026-10-03. The service and both measured backends run on the boa
 | 0 protect the boundary | Done | Ignore rules, no device detail in the repository, plan reviewed |
 | 1 device inventory | Closed, storage pressure increasing | Ran on the board. 8 cores A78C plus A55, 15 GB, no swap, `/dev/fastrpc-cdsp` present and openable, and 48 thermal zones idle at 38.8 C. After staging four model sets, eMMC free space fell to about 11 GB. Add NVMe before expanding the model matrix |
 | 2 runtime proof | Closed for first QCS8275 NPU candidate | QAIRT 2.46.0 installs from apt. Hexagon V75 confirmed. GenieX v0.7.1 loads the Qualcomm Qwen3 1.7B W4A16 QCS8275 bundle and serves it through QNN/HTP. Kare now defaults to the validated GenieX sidecar, with ONNX retained only as an explicit CPU fallback |
-| 3 model selection | GGUF conduit candidate passed the passive-local gate | A Qwen3.5 0.8B Q4_0 GGUF model ran through GenieX on the NPU with an 8192-token context. Short text and cache paths work on the board. Tool-call forwarding through Kare still needs fixing; the direct GenieX endpoint can emit tool-call SSE. Representative coding quality, sustained thermals, and full Copilot CLI behavior remain open |
+| 3 model selection | GGUF conduit candidate passed the full Copilot context gate | Qwen3.5 0.8B Q4_0 ran through GenieX with a 24576-token context. Copilot CLI 1.0.92 loaded all 26 tools, repository instructions, and the builtin GitHub MCP server, then completed through Kare in 43 seconds. Representative coding quality, sustained thermals, and repeated-load latency remain open |
 | 4 service skeleton | Routing and LAN boundary implemented | The service now exposes explicit local, cloud, and automatic model IDs; records actual routes; rejects unsupported ONNX tool calls; enforces API-key plus CIDR requirements for non-loopback binding; and retains bounded inference admission |
 | 5 cache and shared knowledge | Conservative response cache implemented | The opt-in memory cache accepts deterministic non-streaming text-only requests and has bounded size, lifetime, and response length. Repository fingerprints, durable shared knowledge, embeddings, invalidation commands, and cache-quality measurements remain open |
 | 6 Copilot integration | Tiered routing implemented; cloud device validation open | Copilot CLI 1.0.91 reached Kare. Local text, streaming, authentication, and cache behavior pass on the board, but Kare-to-GenieX tool-call translation remains open. GitHub Copilot SDK `auto` returned a live bounded response on x64, cloud text arrived as real deltas, and declaration-only required tools were returned without execution |
@@ -647,7 +653,7 @@ Progress as of 2026-10-03. The service and both measured backends run on the boa
 - Compare quality on coding tasks.
 - Select one default local model and one optional fallback.
 - Record model provenance, license, checksum, quantization, context, and runtime.
-- Test one small GenieX GGUF model at 8192 tokens through llama.cpp HTP. Reject it if tool calls, latency, memory, or quality fail.
+- Keep Qwen3.5 0.8B Q4_0 at the measured 24576-token GenieX window while coding quality, repeated-load latency, memory, and thermals are tested.
 
 ### Stage 4: service skeleton
 
@@ -684,8 +690,9 @@ runtime                project-local .NET 11 RC on the board
 - Point Copilot CLI BYOK at a minimal Kare-compatible endpoint. Done on 2026-10-02 over an SSH local forward, which keeps the loopback binding.
 - Measure Copilot CLI's static context floor before choosing a local default. It was about 4.8k tokens with tool definitions, which rules out the 4096-token GenieX Qwen3 bundle.
 - Keep the ONNX CPU path out of tool-bearing routes. The current .NET client does not support function calling, so Kare returns `unsupported_backend_capability` rather than dropping tools.
-- Test a small GenieX GGUF model at 8192 tokens. QAIRT context is compiled into the bundle and sliding-window eviction cannot fit an oversized initial prompt.
-- Verify streaming, tool calls, cancellation, and offline mode.
+- Run GenieX GGUF at the measured 24576-token window. The launcher advertises 23552 prompt tokens and reserves 1024 output tokens.
+- Keep the cascade gate at 1024 request characters and 32 output tokens. A 6000-character gate exceeded Kare's 100-second GenieX timeout during the full Copilot test.
+- Verify streaming, tool calls, cancellation, and the minimal offline diagnostic mode.
 - Run client-side BYOK tests with an isolated `COPILOT_HOME` so unrelated local plugins cannot change the request.
 - Add the Copilot SDK cloud route. GitHub account routes leave provider configuration unset. Foundry routes use explicit external provider configuration. GitHub `auto` was live-tested on x64.
 - Preserve permissions, streaming, cancellation, and session behavior. Caller tools are declaration-only and are not executed on the board. Cloud text deltas now stream; active-request cancellation still needs board validation.

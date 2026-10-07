@@ -429,6 +429,12 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
                 .Select(static tool => tool.Name)
                 .Take(32) ?? []);
         var totalCharacters = CountTextCharacters(messages);
+        _logger.LogDebug(
+            "Cascade gate received {TotalCharacters} text characters across {MessageCount} messages and {ToolCount} tools; using {RequestCharacters} user-request characters.",
+            totalCharacters,
+            messages.Count,
+            toolCount,
+            request.Length);
         var instructions = $"""
             You are Kare's local Qwen cascade gate. Dashboard authoritative sources and enabled skills
             are supplied in a separate system message. Connected MCP server names and capabilities are

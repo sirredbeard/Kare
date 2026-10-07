@@ -71,7 +71,7 @@ Manual tool-schema prompt formatting and output parsing were not added. That wou
 
 Qualcomm documents that QAIRT context size is compiled into the model bundle. `--nctx` cannot raise it. `--sliding-window` evicts old conversation tokens but cannot make Copilot CLI's initial prompt fit. No public QCS8275 QAIRT bundle with more than 4096 tokens was verified on 2026-10-03.
 
-GenieX documents a different path for GGUF models: llama.cpp can raise `--nctx` up to the model's trained maximum and can target the NPU. The next device experiment is therefore a small supported GGUF model with an 8192-token window. It must pass required tool calls, streaming tool calls, the five coding tasks, first-token latency, memory, and thermals before Kare changes its default.
+GenieX documents a different path for GGUF models: llama.cpp can raise `--nctx` up to the model's trained maximum and can target the NPU. At this point in the test, the next device experiment was a small supported GGUF model with an 8192-token window. The later 2026-10-07 result below records the larger working window.
 
 The installed GenieX 0.7.1 CLI exposes `--nctx`, `--compute npu`, `--think=false`, and QAIRT `--sliding-window`, so this path is available in the version already on the board. The llama.cpp plugin initially failed to load because `libOpenCL.so.1` was absent. Installing Ubuntu's `ocl-icd-libopencl1` package removed that loader error. This only makes the backend loadable; it is not evidence that the next model is fast or correct.
 
@@ -85,6 +85,54 @@ Sources:
 ## Routed gateway progress, 2026-10-03
 
 The GGUF path cleared the passive-local gate. Qwen3.5 0.8B Q4_0 ran through GenieX on the NPU with `--nctx 8192`. A one-token smoke request reached first token in about 0.4 seconds, and the direct GenieX OpenAI-compatible endpoint emitted a valid tool-call SSE. Kare's basic text, streaming, authentication, and cache paths pass on the board, but the Kare-to-GenieX tool-call translation still needs fixing. Kare should remain a conduit: the local model assists with bounded cache, context, and skill maintenance and must not execute caller tools or silently change routes. This is not yet a representative coding-quality or sustained-load benchmark.
+
+## Checked 2026-10-06, Copilot CLI 1.0.92 static context
+
+Copilot CLI 1.0.92 rejected the default interactive surface before sending a request to Kare. Debug logging showed:
+
+```
+catalog_tool_count=26
+tool_count=26
+compaction_static_context_pressure
+```
+
+Raising the advertised prompt limit from 7168 to 7936 and lowering output from 1024 to 256 was not enough while all 26 tools, repository instructions, and the builtin GitHub MCP server remained loaded.
+
+The measured working profile was:
+
+```
+COPILOT_OFFLINE=true
+COPILOT_PROVIDER_MAX_PROMPT_TOKENS=7936
+COPILOT_PROVIDER_MAX_OUTPUT_TOKENS=256
+--disable-builtin-mcps
+--no-custom-instructions
+--available-tools bash
+```
+
+That request completed through Kare in about 40 seconds and reported 6.4k input tokens. The offline setting also removes the harmless `Model catalog ownership cannot be verified` warning because Copilot CLI no longer loads the GitHub model catalog.
+
+This was a bounded diagnostic profile, not a complete Copilot agent.
+
+## Checked 2026-10-07, full Copilot surface at 24576 tokens
+
+The model's trained context is larger than the original 8192-token GenieX setting, and the board had about 11 GiB of memory available after loading larger windows. The measured results were:
+
+- `--nctx 16384` started, but Copilot CLI still rejected the 26-tool static surface before contacting Kare.
+- `--nctx 32768` passed Copilot's static check, but a representative direct cascade decision did not finish within 110 seconds.
+- `--nctx 24576` completed a direct bounded cascade decision in about 52 seconds.
+- The first full Copilot request at 24576 still exceeded Kare's 100-second GenieX timeout because the routing gate admitted up to 6000 request characters.
+- Reducing the gate to the final 1024 request characters and 32 output tokens completed the full Copilot request in 43 seconds.
+
+The successful Copilot request loaded all 26 tools, repository instructions, and the builtin GitHub MCP server. Copilot reported 22.9k input tokens and 304 output tokens. The board still reported about 11 GiB available memory after GenieX loaded the 24576-token window.
+
+The launcher now uses the measured full profile by default:
+
+```
+COPILOT_PROVIDER_MAX_PROMPT_TOKENS=23552
+COPILOT_PROVIDER_MAX_OUTPUT_TOKENS=1024
+```
+
+`--kare-minimal-context` retains the earlier 8192-token offline profile for diagnosis. The catalog ownership warning remains harmless in the default online profile. The minimal offline profile avoids it because Copilot does not load GitHub services.
 
 Kare now has explicit wire routes:
 

@@ -42,6 +42,9 @@ The launcher reads these values when present:
 - `KARE_WIRE_MODEL`
 - `KARE_MAX_PROMPT_TOKENS`
 - `KARE_MAX_OUTPUT_TOKENS`
+- `KARE_LOG_DIRECTORY`
+- `KARE_LOG_FILE_BYTES`
+- `KARE_LOG_TOTAL_BYTES`
 
 The launcher writes the last healthy device address to `last-device-host` beside the protected config. It must write the file only after `/health` succeeds and use mode `600` on Unix.
 
@@ -66,6 +69,12 @@ The launcher should:
 - wait for `/health` on `http://127.0.0.1:5285`
 - export the required BYOK env vars for Copilot CLI
 - start Copilot with an isolated `COPILOT_HOME`
+
+The default launcher profile matches the measured 24576-token GenieX runtime. It advertises 23552 prompt tokens and reserves 1024 output tokens. Copilot CLI 1.0.92 then loads all 26 tools, repository instructions, and the builtin GitHub MCP server without rejecting the turn before Kare receives it.
+
+The local cascade gate uses at most the final 1024 request characters and 32 output tokens. Keep this routing request small. The full Copilot wrapper took more than two minutes when the gate admitted 6000 characters.
+
+`--kare-verbose` adds Copilot CLI debug logging under protected local configuration. `--kare-log-dir PATH` selects the directory. `--kare-minimal-context` selects the earlier 8192-token offline diagnostic profile with builtin MCP servers and repository instructions disabled and only `bash` exposed.
 
 The repo does not depend on a shell script as the primary interface. The .NET launcher is the canonical path.
 
@@ -115,6 +124,18 @@ Publish and test the device service with:
 
 Keep the checked-out device branch synchronized with Git. Do not copy source trees or credentials through ad hoc deployment commands. `build/deploy.sh` is only for copying an already-published artifact when Git-based device iteration is not available.
 
+Use this workflow for normal device changes:
+
+1. Commit locally without co-authors or co-committers.
+2. Push the branch to GitHub.
+3. SSH to the device checkout and run `git pull --ff-only`.
+4. Stop `kare.service`.
+5. Run `./build/device-publish.sh --jit --test`.
+6. Confirm `kare.service` and `kare-geniex.service` are active.
+7. Check `http://127.0.0.1:5285/health` and `http://127.0.0.1:18181/v1/models`.
+
+Do not rebuild from an uncommitted source copy on the device. Do not use Native AOT for the normal iteration path.
+
 ## Device storage layout
 
 The VENTUNO Q boots from eMMC. The installed OSCOO PCIe 512GB drive is `/dev/nvme0n1p1`, formatted as ext4, and mounted at `/var/lib/kare` with `noatime`.
@@ -137,6 +158,8 @@ The `kare-geniex.service` user unit uses `GENIEX_DATADIR=/var/lib/kare/models/ge
 Kare does not retain persistent logs, response-cache data, or backups in the NVMe layout. The bounded response cache is process-local and starts empty after restart. Do not add a database, log directory, backup directory, or cache directory to `/var/lib/kare` without an explicit retention, deletion, and recovery policy.
 
 The drive currently negotiates PCIe Gen4 x1 even though the root port advertises x4. Record that fact in performance notes and do not describe the storage path as a full Gen4 x4 path until firmware, device tree, kernel, and physical seating checks explain it.
+
+Verbose Kare service logs live on eMMC under `%h/.local/state/kare/logs`, not NVMe. Set `KARE_LOG_DIRECTORY` to that absolute path and `Logging__LogLevel__Default=Debug` in the protected service environment. Kare rolls files at 25 MiB and retains no more than 250 MiB by default. `KARE_LOG_FILE_BYTES` and `KARE_LOG_TOTAL_BYTES` may lower those limits.
 
 ## Copilot integration
 
