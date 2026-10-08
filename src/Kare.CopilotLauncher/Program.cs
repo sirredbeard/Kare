@@ -109,22 +109,33 @@ internal sealed class CopilotKareApp
             return 1;
         }
 
+        EnsurePrivateDirectory(configDirectory);
+        var controlPath = Path.Combine(
+            configDirectory,
+            $"ssh-control-{Environment.ProcessId}-{Guid.NewGuid():N}.sock");
         using var sshProcess = CreateSshProcess(
             deviceUser,
             deviceHost,
             localPort,
             remotePort,
-            devicePassword);
+            devicePassword,
+            controlPath);
 
         sshProcess.Start();
         var sshErrorTask = sshProcess.StandardError.ReadToEndAsync();
 
         try
         {
+            if (!await WaitForSshConnectionAsync(
+                    sshProcess,
+                    sshErrorTask,
+                    TimeSpan.FromSeconds(healthTimeoutSeconds.Value)))
+            {
+                return 1;
+            }
+
             var healthBaseUrl = $"http://127.0.0.1:{localPort}";
             var isReady = await WaitForHealthAsync(
-                sshProcess,
-                sshErrorTask,
                 healthBaseUrl,
                 TimeSpan.FromSeconds(healthTimeoutSeconds.Value));
 
@@ -149,7 +160,8 @@ internal sealed class CopilotKareApp
         }
         finally
         {
-            StopProcess(sshProcess, "SSH tunnel");
+            StopSshTunnel(deviceUser, deviceHost, controlPath);
+            File.Delete(controlPath);
         }
     }
 
@@ -241,9 +253,15 @@ internal sealed class CopilotKareApp
         string deviceHost,
         string localPort,
         string remotePort,
-        string devicePassword)
+        string devicePassword,
+        string controlPath)
     {
-        var sshArguments = BuildSshArguments(deviceUser, deviceHost, localPort, remotePort);
+        var sshArguments = BuildSshArguments(
+            deviceUser,
+            deviceHost,
+            localPort,
+            remotePort,
+            controlPath);
         var startInfo = new ProcessStartInfo
         {
             FileName = string.IsNullOrWhiteSpace(devicePassword) ? "ssh" : "sshpass",
@@ -269,11 +287,12 @@ internal sealed class CopilotKareApp
         };
     }
 
-    private static IReadOnlyList<string> BuildSshArguments(
+    internal static IReadOnlyList<string> BuildSshArguments(
         string deviceUser,
         string deviceHost,
         string localPort,
-        string remotePort)
+        string remotePort,
+        string controlPath)
     {
         return
         [
@@ -287,6 +306,10 @@ internal sealed class CopilotKareApp
             "ServerAliveCountMax=3",
             "-o",
             "StrictHostKeyChecking=accept-new",
+            "-M",
+            "-S",
+            controlPath,
+            "-f",
             "-N",
             "-L",
             $"{localPort}:127.0.0.1:{remotePort}",
@@ -294,9 +317,43 @@ internal sealed class CopilotKareApp
         ];
     }
 
-    private static async Task<bool> WaitForHealthAsync(
+    private static async Task<bool> WaitForSshConnectionAsync(
         Process sshProcess,
         Task<string> sshErrorTask,
+        TimeSpan timeout)
+    {
+        var exitTask = sshProcess.WaitForExitAsync();
+        var completedTask = await Task.WhenAny(exitTask, Task.Delay(timeout));
+        if (completedTask != exitTask)
+        {
+            Console.Error.WriteLine(
+                $"SSH authentication did not complete within {timeout.TotalSeconds:0}s.");
+            if (!sshProcess.HasExited)
+            {
+                sshProcess.Kill(entireProcessTree: true);
+                await exitTask;
+            }
+
+            return false;
+        }
+
+        await exitTask;
+        if (sshProcess.ExitCode == 0)
+        {
+            return true;
+        }
+
+        var error = (await sshErrorTask).Trim();
+        Console.Error.WriteLine("SSH tunnel did not authenticate or start.");
+        if (!string.IsNullOrWhiteSpace(error))
+        {
+            Console.Error.WriteLine(error);
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> WaitForHealthAsync(
         string baseUrl,
         TimeSpan timeout)
     {
@@ -304,18 +361,6 @@ internal sealed class CopilotKareApp
 
         while (DateTimeOffset.UtcNow < deadline)
         {
-            if (sshProcess.HasExited)
-            {
-                var error = (await sshErrorTask).Trim();
-                Console.Error.WriteLine("SSH tunnel exited before Kare became ready.");
-                if (!string.IsNullOrWhiteSpace(error))
-                {
-                    Console.Error.WriteLine(error);
-                }
-
-                return false;
-            }
-
             if (await IsHealthyAsync(baseUrl))
             {
                 return true;
@@ -326,6 +371,39 @@ internal sealed class CopilotKareApp
 
         Console.Error.WriteLine($"Kare did not become ready at {baseUrl}/health within {timeout.TotalSeconds:0}s.");
         return false;
+    }
+
+    private static void StopSshTunnel(
+        string deviceUser,
+        string deviceHost,
+        string controlPath)
+    {
+        using var stopProcess = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "ssh",
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+            },
+        };
+        stopProcess.StartInfo.ArgumentList.Add("-S");
+        stopProcess.StartInfo.ArgumentList.Add(controlPath);
+        stopProcess.StartInfo.ArgumentList.Add("-O");
+        stopProcess.StartInfo.ArgumentList.Add("exit");
+        stopProcess.StartInfo.ArgumentList.Add($"{deviceUser}@{deviceHost}");
+
+        if (!stopProcess.Start())
+        {
+            return;
+        }
+
+        if (!stopProcess.WaitForExit(5000))
+        {
+            stopProcess.Kill(entireProcessTree: true);
+            stopProcess.WaitForExit();
+        }
     }
 
     private static async Task<bool> IsHealthyAsync(string baseUrl)
