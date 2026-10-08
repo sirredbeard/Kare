@@ -34,7 +34,11 @@
             "Priority": 100,
             "SupportsTools": true,
             "SupportsImages": true,
-            "Authentication": "Copilot"
+            "Authentication": "Copilot",
+            "AverageInputCostUsdPerMillionTokens": null,
+            "AverageOutputCostUsdPerMillionTokens": null,
+            "PricingSource": null,
+            "PricingAsOf": null
           },
           {
             "Id": "copilot-heavy",
@@ -44,7 +48,11 @@
             "Priority": 100,
             "SupportsTools": true,
             "SupportsImages": true,
-            "Authentication": "Copilot"
+            "Authentication": "Copilot",
+            "AverageInputCostUsdPerMillionTokens": null,
+            "AverageOutputCostUsdPerMillionTokens": null,
+            "PricingSource": null,
+            "PricingAsOf": null
           },
           {
             "Id": "foundry-responses-example",
@@ -57,7 +65,11 @@
             "BaseUrl": "https://your-resource.services.ai.azure.com",
             "Authentication": "AzureCli",
             "TokenScope": "https://cognitiveservices.azure.com/.default",
-            "WireApi": "responses"
+            "WireApi": "responses",
+            "AverageInputCostUsdPerMillionTokens": null,
+            "AverageOutputCostUsdPerMillionTokens": null,
+            "PricingSource": null,
+            "PricingAsOf": null
           },
           {
             "Id": "foundry-anthropic-example",
@@ -70,7 +82,11 @@
             "BaseUrl": "https://your-resource.services.ai.azure.com",
             "Authentication": "AzureCli",
             "TokenScope": "https://cognitiveservices.azure.com/.default",
-            "WireApi": "anthropic"
+            "WireApi": "anthropic",
+            "AverageInputCostUsdPerMillionTokens": null,
+            "AverageOutputCostUsdPerMillionTokens": null,
+            "PricingSource": null,
+            "PricingAsOf": null
           }
         ]
       }

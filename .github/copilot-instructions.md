@@ -61,6 +61,8 @@ The launcher writes the last healthy device address to `last-device-host` beside
 
 Keep service settings, cloud model catalogs, provider endpoints, deployment names, authentication state, and device-specific paths in protected external files. `examples/KARE_CONFIG_FILE.example.json` is a schema example, not a deployable configuration.
 
+Model catalog entries may include average input and output prices in USD per million tokens, a public HTTPS pricing source, and the date checked. The dashboard uses these values for estimates only. Kare does not query or track remaining GitHub or Azure budgets.
+
 ## Local launch path
 
 The supported launch flow is the .NET launcher in `src/Kare.CopilotLauncher`. It accepts a device IP as the first argument and remembers the last known IP when it is not provided.

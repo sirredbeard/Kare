@@ -407,20 +407,25 @@ public static class DashboardEndpoints
                 <h2>Model call breakdown</h2>
                 <div style="display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:center;">
                   <svg id="model-route-chart" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="Model route chart"></svg>
-                  <div id="model-route-legend"></div>
+                  <div>
+                    <div id="model-route-legend"></div>
+                    <h3>Estimated cost by used model</h3>
+                    <div id="model-cost-estimates"></div>
+                  </div>
                 </div>
+                <p class="muted">Estimates cover this process lifetime and use configured average model prices and observed tokens. They are not provider invoices or remaining budgets.</p>
               </article>
               <article class="card full">
                 <h2>Model endpoints</h2>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>ID</th><th>Provider</th><th>Model</th><th>Wire model</th><th>Endpoint</th><th>Tier</th><th>Tools</th><th>Requests</th><th>Input tokens</th><th>Output tokens</th><th>Last used</th></tr></thead>
+                  <thead><tr><th>ID</th><th>Provider</th><th>Model</th><th>Wire model</th><th>Endpoint</th><th>Tier</th><th>Tools</th><th>Requests</th><th>Input tokens</th><th>Output tokens</th><th>Avg input USD / million</th><th>Avg output USD / million</th><th>Pricing source</th><th>Pricing as of</th><th>Last used</th></tr></thead>
                   <tbody id="model-endpoints"></tbody>
                 </table></div>
               </article>
               <article class="card full">
                 <h2>Usage by model</h2>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>Model</th><th>Backend</th><th>Route</th><th>Requests</th><th>Success</th><th>Billable</th><th>Fallbacks</th><th>Input tokens</th><th>Output tokens</th><th>Avg TTFT</th><th>Avg total</th><th>Avg tok/s</th></tr></thead>
+                  <thead><tr><th>Model</th><th>Backend</th><th>Route</th><th>Requests</th><th>Success</th><th>Billable</th><th>Fallbacks</th><th>Input tokens</th><th>Output tokens</th><th>Estimated cost or savings</th><th>Avg TTFT</th><th>Avg total</th><th>Avg tok/s</th></tr></thead>
                   <tbody id="models"></tbody>
                 </table></div>
               </article>
@@ -513,6 +518,10 @@ public static class DashboardEndpoints
               .replaceAll("'", '&#039;');
             const time = value => value ? new Date(value).toLocaleString() : 'n/a';
             const number = (value, suffix = '') => value == null ? 'n/a' : `${Number(value).toFixed(1)}${suffix}`;
+            const currency = new Intl.NumberFormat('en-US', {
+              style: 'currency', currency: 'USD', maximumSignificantDigits: 8
+            });
+            const usd = value => value == null ? 'unknown' : currency.format(Number(value));
             const empty = columns => `<tr><td class="empty" colspan="${columns}">No data yet.</td></tr>`;
             function renderModelBreakdown(snapshot) {
               const totals = (snapshot.modelEndpoints || []).map((item, index) => ({
@@ -554,6 +563,26 @@ public static class DashboardEndpoints
                   <span title="${escapeHtml(segment.endpoint)}">${escapeHtml(segment.name)}</span>
                   <span class="muted">${segment.value} (${((segment.pct) * 100).toFixed(1)}%)</span>
                 </div>`).join('');
+
+              const estimates = (snapshot.modelEndpoints || []).filter(item => item.requestCount > 0);
+              const estimateList = document.querySelector('#model-cost-estimates');
+              estimateList.innerHTML = estimates.length ? estimates.map(item => {
+                const localEstimate = item.id === 'local';
+                const amount = localEstimate
+                  ? `${usd(item.estimatedAvoidedCostUsd)} estimated avoided`
+                  : usd(item.estimatedCostUsd);
+                const detail = localEstimate
+                  ? `${usd(item.averageEstimatedAvoidedCostPerRequestUsd)} per successful local call; ${item.estimatedAvoidedCostRequests || 0} measured; mean of ${item.averagePriceModelCount || 0} priced models`
+                  : item.estimatedCostUsd == null
+                    ? 'Price or token usage unavailable'
+                    : `${item.estimatedCostRequests} measured calls`;
+                const source = localEstimate
+                  ? `Estimated against the mean of ${item.averagePriceModelCount || 0} configured cloud-model prices`
+                  : item.pricingSource
+                  ? `Prices checked ${item.pricingAsOf || 'on an unknown date'}: ${item.pricingSource}`
+                  : 'No sourced price is configured for this model';
+                return `<div style="padding:4px 0;" title="${escapeHtml(source)}"><strong>${escapeHtml(item.modelId)}</strong>: ${escapeHtml(amount)} <span class="muted">(${escapeHtml(detail)})</span></div>`;
+              }).join('') : '<div class="muted">No used models yet.</div>';
             }
 
             function hashString(value) {
@@ -595,10 +624,15 @@ public static class DashboardEndpoints
                   <td>${escapeHtml(item.endpoint)}</td><td>${escapeHtml(item.tier)}</td>
                   <td>${item.supportsTools ? 'yes' : 'no'}</td><td>${escapeHtml(item.requestCount)}</td>
                   <td>${escapeHtml(item.inputTokens)}</td><td>${escapeHtml(item.outputTokens)}</td>
+                  <td>${escapeHtml(usd(item.averageInputCostUsdPerMillionTokens))}</td>
+                  <td>${escapeHtml(usd(item.averageOutputCostUsdPerMillionTokens))}</td>
+                  <td>${escapeHtml(item.pricingSource ?? 'n/a')}</td>
+                  <td>${escapeHtml(item.pricingAsOf ?? 'n/a')}</td>
                   <td>${escapeHtml(time(item.lastUsedAt))}</td>
-                </tr>`).join('') : empty(11);
+                </tr>`).join('') : empty(15);
 
               const models = snapshot.modelUsage || [];
+              const endpointById = new Map(endpoints.map(item => [item.id, item]));
               document.querySelector('#models').innerHTML = models.length ? models.map(item => `
                 <tr>
                   <td>${escapeHtml(item.modelId)}</td><td>${escapeHtml(item.backend)}</td>
@@ -607,10 +641,17 @@ public static class DashboardEndpoints
                   <td>${escapeHtml(item.successfulRequests)} / ${escapeHtml(item.failedRequests)} failed</td>
                   <td>${escapeHtml(item.billableRequests)}</td><td>${escapeHtml(item.fallbackRequests)}</td>
                   <td>${escapeHtml(item.inputTokens)}</td><td>${escapeHtml(item.outputTokens)}</td>
+                  <td>${(() => {
+                    const endpoint = endpointById.get(item.providerRouteId || 'local');
+                    if (!endpoint) return 'unknown';
+                    return endpoint.estimatedAvoidedCostUsd != null
+                      ? `${usd(endpoint.estimatedAvoidedCostUsd)} avoided`
+                      : usd(endpoint.estimatedCostUsd);
+                  })()}</td>
                   <td>${escapeHtml(number(item.averageTimeToFirstTokenMs, ' ms'))}</td>
                   <td>${escapeHtml(number(item.averageTotalDurationMs, ' ms'))}</td>
                   <td>${escapeHtml(number(item.averageDecodeTokensPerSecond))}</td>
-                </tr>`).join('') : empty(12);
+                </tr>`).join('') : empty(13);
 
               document.querySelector('#requests').innerHTML = requests.length ? requests.map(item => `
                 <tr>

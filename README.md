@@ -170,6 +170,8 @@ Kare includes a local web dashboard on port `5285` at `/dashboard`. Open `http:/
 
 The dashboard stores operational metadata, not prompts, source code, generated responses, tokens, or protected config. The access rules and feature list are in [Copilot instructions](.github/copilot-instructions.md#operations-dashboard).
 
+Model cost estimates use average input and output prices configured for each cloud model in the protected catalog, with a public pricing source and date. The dashboard estimates local SLM savings using the mean of configured cloud-model prices when token usage is available. These process-local estimates are not provider invoices or remaining budgets. Kare does not query GitHub or Azure budgets.
+
 Authoritative sources, skills, and MCP servers are added through one paste field per section, not a structured form. Paste a URL, repository, `SKILL.md` link, absolute device path, install command text, or MCP endpoint, and Kare classifies it, resolves it deterministically, and either activates it directly or holds it for review before anything is fetched or enabled. Intake details and the proposal lifecycle are in [Copilot instructions](.github/copilot-instructions.md#dashboard-intake).
 
 ## Related projects

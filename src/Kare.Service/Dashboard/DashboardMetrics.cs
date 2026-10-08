@@ -71,7 +71,8 @@ public static class DashboardMetrics
         long EstimatedCostRequests = 0,
         decimal? EstimatedAvoidedCostUsd = null,
         decimal? AverageEstimatedAvoidedCostPerRequestUsd = null,
-        long EstimatedAvoidedCostRequests = 0);
+        long EstimatedAvoidedCostRequests = 0,
+        int? AveragePriceModelCount = null);
 
     /// <summary>
     /// High-level activity: routing decision, fallback event, or service action.

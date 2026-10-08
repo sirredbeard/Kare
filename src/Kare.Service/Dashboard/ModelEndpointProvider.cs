@@ -52,11 +52,13 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
         var observed = usage.Where(item =>
             item.ProviderRouteId is null &&
             !string.Equals(item.Backend, BackendKind.Remote.ToString(), StringComparison.Ordinal));
-        var pricedModels = _cloud.Models
-            .Where(static model =>
-                model.AverageInputCostUsdPerMillionTokens is not null &&
-                model.AverageOutputCostUsdPerMillionTokens is not null)
-            .ToArray();
+        CloudModelRouteOptions[] pricedModels = _cloud.Enabled
+            ? _cloud.Models
+                .Where(static model =>
+                    model.AverageInputCostUsdPerMillionTokens is not null &&
+                    model.AverageOutputCostUsdPerMillionTokens is not null)
+                .ToArray()
+            : [];
         decimal? averageInputPrice = pricedModels.Length == 0
             ? null
             : pricedModels.Average(static model => model.AverageInputCostUsdPerMillionTokens!.Value);
@@ -79,7 +81,8 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
             averageOutputPrice,
             pricingSource: null,
             pricingAsOf: null,
-            estimateAvoidedCost: true);
+            estimateAvoidedCost: true,
+            averagePriceModelCount: pricedModels.Length);
     }
 
     private static DashboardMetrics.ModelEndpoint CreateCloud(
@@ -121,7 +124,8 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
         decimal? averageOutputPrice,
         string? pricingSource,
         DateOnly? pricingAsOf,
-        bool estimateAvoidedCost)
+        bool estimateAvoidedCost,
+        int? averagePriceModelCount = null)
     {
         var rows = observed.ToArray();
         var inputTokens = rows.Sum(static item => item.PricedInputTokens);
@@ -161,12 +165,13 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
             pricingSource,
             pricingAsOf,
             estimatedCost,
-            hasPrices ? pricedRequests : 0,
+            !estimateAvoidedCost && hasPrices ? pricedRequests : 0,
             estimatedAvoidedCost,
             estimatedAvoidedCost is null
                 ? null
                 : estimatedAvoidedCost.Value / successfulPricedRequests,
-            estimateAvoidedCost && hasPrices ? successfulPricedRequests : 0);
+            estimateAvoidedCost && hasPrices ? successfulPricedRequests : 0,
+            averagePriceModelCount);
     }
 
     private static decimal EstimateCost(

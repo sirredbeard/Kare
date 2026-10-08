@@ -133,6 +133,12 @@ public sealed class DashboardTests
         Assert.Equal(1, usage.FailedRequests);
         Assert.Equal(30, usage.InputTokens);
         Assert.Equal(12, usage.OutputTokens);
+        Assert.Equal(2, usage.PricedRequests);
+        Assert.Equal(30, usage.PricedInputTokens);
+        Assert.Equal(12, usage.PricedOutputTokens);
+        Assert.Equal(1, usage.SuccessfulPricedRequests);
+        Assert.Equal(10, usage.SuccessfulPricedInputTokens);
+        Assert.Equal(5, usage.SuccessfulPricedOutputTokens);
         Assert.Equal(120, usage.AverageTimeToFirstTokenMs);
         Assert.Equal(300, usage.AverageTotalDurationMs);
     }
