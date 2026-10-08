@@ -97,6 +97,10 @@ public static class ChatCompletionsEndpoints
             messages = OpenAiTranslator.ToChatMessages(request.Messages);
             responseModelId = modelId;
             chatOptions = OpenAiTranslator.ToChatOptions(request, modelId);
+            AddRoutingMode(
+                chatOptions,
+                serviceOptions.Value.DefaultRoutingMode,
+                context.Request.Headers);
             AddCacheFingerprints(
                 chatOptions,
                 knowledge,
@@ -224,7 +228,11 @@ public static class ChatCompletionsEndpoints
         options.AdditionalProperties[ResponseCache.ContextFingerprintOptionName] =
             knowledge.ContextVersion;
         options.AdditionalProperties[ResponseCache.RoutePolicyVersionOptionName] =
-            ComputeRoutePolicyFingerprint(routePolicy);
+            ComputeRoutePolicyFingerprint(
+                routePolicy,
+                options.AdditionalProperties.TryGetValue("kare.routing.mode", out var mode)
+                    ? mode
+                    : null);
         if (headers.TryGetValue("X-Kare-Repository-Fingerprint", out var values) &&
             values.Count > 0)
         {
@@ -245,7 +253,35 @@ public static class ChatCompletionsEndpoints
         }
     }
 
-    private static string ComputeRoutePolicyFingerprint(RoutePolicyOptions options)
+    private static void AddRoutingMode(
+        ChatOptions options,
+        RouteMode defaultMode,
+        IHeaderDictionary headers)
+    {
+        var mode = defaultMode;
+        if (headers.TryGetValue("X-Kare-Routing-Mode", out var values) &&
+            values.Count > 0 &&
+            (!Enum.TryParse(values[0], ignoreCase: true, out mode) ||
+             mode is not (RouteMode.Personal or RouteMode.Work)))
+        {
+            throw new InvalidRequestException(
+                "X-Kare-Routing-Mode must be Personal or Work.",
+                "invalid_routing_mode");
+        }
+
+        if (mode is not (RouteMode.Personal or RouteMode.Work))
+        {
+            throw new InvalidOperationException(
+                "Kare:Service:DefaultRoutingMode must be Personal or Work.");
+        }
+
+        options.AdditionalProperties ??= new();
+        options.AdditionalProperties["kare.routing.mode"] = mode.ToString();
+    }
+
+    private static string ComputeRoutePolicyFingerprint(
+        RoutePolicyOptions options,
+        object? routingMode)
     {
         var value = string.Join(
             "\n",
@@ -266,7 +302,8 @@ public static class ChatCompletionsEndpoints
             options.CascadeCritiqueMaxInputCharacters,
             options.CascadeCritiqueMaxOutputTokens,
             options.ModeratePromptCharacterThreshold,
-            options.ComplexPromptCharacterThreshold);
+            options.ComplexPromptCharacterThreshold,
+            routingMode);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     }
 

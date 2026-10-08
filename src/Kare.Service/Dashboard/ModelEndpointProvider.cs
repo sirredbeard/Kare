@@ -135,10 +135,10 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
         var successfulPricedOutputTokens = rows.Sum(static item => item.SuccessfulPricedOutputTokens);
         var successfulPricedRequests = rows.Sum(static item => item.SuccessfulPricedRequests);
         var hasPrices = averageInputPrice is not null && averageOutputPrice is not null;
-        var estimatedCost = !estimateAvoidedCost && hasPrices && pricedRequests > 0
+        decimal? estimatedCost = !estimateAvoidedCost && hasPrices && pricedRequests > 0
             ? EstimateCost(inputTokens, outputTokens, averageInputPrice!.Value, averageOutputPrice!.Value)
             : null;
-        var estimatedAvoidedCost = estimateAvoidedCost &&
+        decimal? estimatedAvoidedCost = estimateAvoidedCost &&
             hasPrices &&
             successfulPricedRequests > 0
                 ? EstimateCost(

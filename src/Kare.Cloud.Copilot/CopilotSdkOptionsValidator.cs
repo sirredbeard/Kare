@@ -1,3 +1,4 @@
+using Kare.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Kare.Cloud.Copilot;
@@ -46,6 +47,13 @@ public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOpti
         var routeIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var model in options.Models)
         {
+            if (model.AllowedModes.Count == 0 ||
+                model.AllowedModes.Any(mode => mode is not (RouteMode.Personal or RouteMode.Work)))
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Cloud model {model.Id} must allow Personal or Work routing modes.");
+            }
+
             if (string.IsNullOrWhiteSpace(model.Id) || !routeIds.Add(model.Id))
             {
                 return ValidateOptionsResult.Fail(

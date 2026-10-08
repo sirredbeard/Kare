@@ -69,7 +69,8 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         var requiresImages = RequiresImages(materialized);
         var candidates = GetCandidates(
             requiresTools || options?.Tools is { Count: > 0 },
-            requiresImages);
+            requiresImages,
+            options);
         if (!_options.EnableCascadeEscalation)
         {
             if (requiresImages)
@@ -171,7 +172,8 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         var requiresImages = RequiresImages(materialized);
         var candidates = GetCandidates(
             requiresTools || options?.Tools is { Count: > 0 },
-            requiresImages);
+            requiresImages,
+            options);
         if (!_options.EnableCascadeEscalation)
         {
             if (requiresImages)
@@ -758,15 +760,30 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
 
     private IReadOnlyList<CloudModelDescriptor> GetCandidates(
         bool requiresTools,
-        bool requiresImages) =>
+        bool requiresImages,
+        ChatOptions? options) =>
         _catalog.Models
             .Where(model =>
+                (model.AllowedModes & GetRoutingMode(options)) != 0 &&
                 (!requiresTools || model.SupportsTools) &&
                 (!requiresImages || model.SupportsImages))
             .OrderBy(static model => model.Priority)
             .ThenBy(static model => model.Tier)
             .ThenBy(static model => model.Id, StringComparer.Ordinal)
             .ToArray();
+
+    private static RouteMode GetRoutingMode(ChatOptions? options)
+    {
+        if (options?.AdditionalProperties?.TryGetValue("kare.routing.mode", out var value) == true &&
+            value is string text &&
+            Enum.TryParse<RouteMode>(text, ignoreCase: true, out var mode) &&
+            mode is RouteMode.Personal or RouteMode.Work)
+        {
+            return mode;
+        }
+
+        return RouteMode.Personal;
+    }
 
     private static bool RequiresTools(IReadOnlyList<ChatMessage> messages, ChatOptions? options) =>
         options?.ToolMode is RequiredChatToolMode ||

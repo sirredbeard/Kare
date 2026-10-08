@@ -47,7 +47,10 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 model.Tier,
                 model.Priority,
                 model.SupportsTools,
-                model.SupportsImages))
+                model.SupportsImages,
+                model.AllowedModes.Aggregate(
+                    (RouteMode)0,
+                    static (modes, mode) => modes | mode)))
             .ToArray();
     }
 

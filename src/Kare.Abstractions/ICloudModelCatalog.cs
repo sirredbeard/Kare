@@ -43,7 +43,8 @@ public sealed record CloudModelDescriptor(
     CloudModelTier Tier,
     int Priority,
     bool SupportsTools,
-    bool SupportsImages = false)
+    bool SupportsImages = false,
+    RouteMode AllowedModes = RouteMode.Both)
 {
     /// <summary>Route recorded when this model serves a request.</summary>
     public KareRoute Route => Provider == CloudModelProvider.MicrosoftFoundry
@@ -51,6 +52,20 @@ public sealed record CloudModelDescriptor(
         : Tier == CloudModelTier.Fast
             ? KareRoute.CopilotLight
             : KareRoute.CopilotHeavy;
+}
+
+/// <summary>Provider boundary selected for a request.</summary>
+[Flags]
+public enum RouteMode
+{
+    /// <summary>Personal repositories and accounts.</summary>
+    Personal = 1,
+
+    /// <summary>Work-owned repositories and accounts.</summary>
+    Work = 2,
+
+    /// <summary>Allow the route in either boundary.</summary>
+    Both = Personal | Work,
 }
 
 /// <summary>Supported direct cloud providers.</summary>
