@@ -38,6 +38,8 @@ The launcher reads these values when present:
 - `KARE_TUNNEL_LOCAL_PORT`
 - `KARE_TUNNEL_REMOTE_PORT`
 - `KARE_TUNNEL_READY_TIMEOUT`
+- `KARE_WORK_ORGANIZATIONS`
+- `KARE_WORK_REPOSITORIES`
 - `KARE_MODEL_ID`
 - `KARE_WIRE_MODEL`
 - `KARE_MAX_PROMPT_TOKENS`
@@ -45,6 +47,11 @@ The launcher reads these values when present:
 - `KARE_LOG_DIRECTORY`
 - `KARE_LOG_FILE_BYTES`
 - `KARE_LOG_TOTAL_BYTES`
+
+`KARE_WORK_ORGANIZATIONS` is a comma-separated protected list of GitHub owners.
+`KARE_WORK_REPOSITORIES` is a comma-separated protected list of normalized
+`owner/repository` values. The launcher also treats `neverenginsupport` and
+`dotnet` as work owners. `--kare-work` selects Work mode for one session.
 
 Kare-owned GenieX process settings use the protected service configuration:
 

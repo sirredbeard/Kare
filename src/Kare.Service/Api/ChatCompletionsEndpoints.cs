@@ -230,8 +230,11 @@ public static class ChatCompletionsEndpoints
         options.AdditionalProperties[ResponseCache.RoutePolicyVersionOptionName] =
             ComputeRoutePolicyFingerprint(
                 routePolicy,
-                options.AdditionalProperties.TryGetValue("kare.routing.mode", out var mode)
+                options.AdditionalProperties.TryGetValue(RouteModePolicy.ModeOptionName, out var mode)
                     ? mode
+                    : null,
+                options.AdditionalProperties.TryGetValue(RouteModePolicy.ReasonOptionName, out var reason)
+                    ? reason
                     : null);
         if (headers.TryGetValue("X-Kare-Repository-Fingerprint", out var values) &&
             values.Count > 0)
@@ -259,6 +262,8 @@ public static class ChatCompletionsEndpoints
         IHeaderDictionary headers)
     {
         var mode = defaultMode;
+        var reason = defaultMode == RouteMode.Work ? "configured_work" : "default_personal";
+        var hasReasonHeader = false;
         if (headers.TryGetValue("X-Kare-Routing-Mode", out var values) &&
             values.Count > 0 &&
             (!Enum.TryParse(values[0], ignoreCase: true, out mode) ||
@@ -275,13 +280,61 @@ public static class ChatCompletionsEndpoints
                 "Kare:Service:DefaultRoutingMode must be Personal or Work.");
         }
 
+        if (headers.TryGetValue("X-Kare-Routing-Reason", out var reasonValues) &&
+            reasonValues.Count > 0)
+        {
+            reason = reasonValues[0];
+            hasReasonHeader = true;
+        }
+
+        if (!hasReasonHeader)
+        {
+            reason = mode == RouteMode.Work ? "configured_work" : "default_personal";
+        }
+
+        if (reason is not (
+            "default_personal" or
+            "configured_work" or
+            "explicit_work" or
+            "protected_mapping" or
+            "org_match" or
+            "upstream_match"))
+        {
+            throw new InvalidRequestException(
+                "X-Kare-Routing-Reason is not a recognized routing selection reason.",
+                "invalid_routing_reason");
+        }
+
+        if (mode == RouteMode.Work &&
+            reason is "default_personal")
+        {
+            throw new InvalidRequestException(
+                "Work routing requires a work routing selection reason.",
+                "invalid_routing_reason");
+        }
+
+        if (mode == RouteMode.Personal &&
+            reason is (
+                "configured_work" or
+                "explicit_work" or
+                "protected_mapping" or
+                "org_match" or
+                "upstream_match"))
+        {
+            throw new InvalidRequestException(
+                "Personal routing cannot use a work routing selection reason.",
+                "invalid_routing_reason");
+        }
+
         options.AdditionalProperties ??= new();
-        options.AdditionalProperties["kare.routing.mode"] = mode.ToString();
+        options.AdditionalProperties[RouteModePolicy.ModeOptionName] = mode.ToString();
+        options.AdditionalProperties[RouteModePolicy.ReasonOptionName] = reason;
     }
 
     private static string ComputeRoutePolicyFingerprint(
         RoutePolicyOptions options,
-        object? routingMode)
+        object? routingMode,
+        object? routingReason)
     {
         var value = string.Join(
             "\n",
@@ -303,7 +356,8 @@ public static class ChatCompletionsEndpoints
             options.CascadeCritiqueMaxOutputTokens,
             options.ModeratePromptCharacterThreshold,
             options.ComplexPromptCharacterThreshold,
-            routingMode);
+            routingMode,
+            routingReason);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     }
 

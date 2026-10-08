@@ -764,26 +764,13 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         ChatOptions? options) =>
         _catalog.Models
             .Where(model =>
-                (model.AllowedModes & GetRoutingMode(options)) != 0 &&
+                RouteModePolicy.Allows(model, options) &&
                 (!requiresTools || model.SupportsTools) &&
                 (!requiresImages || model.SupportsImages))
             .OrderBy(static model => model.Priority)
             .ThenBy(static model => model.Tier)
             .ThenBy(static model => model.Id, StringComparer.Ordinal)
             .ToArray();
-
-    private static RouteMode GetRoutingMode(ChatOptions? options)
-    {
-        if (options?.AdditionalProperties?.TryGetValue("kare.routing.mode", out var value) == true &&
-            value is string text &&
-            Enum.TryParse<RouteMode>(text, ignoreCase: true, out var mode) &&
-            mode is RouteMode.Personal or RouteMode.Work)
-        {
-            return mode;
-        }
-
-        return RouteMode.Personal;
-    }
 
     private static bool RequiresTools(IReadOnlyList<ChatMessage> messages, ChatOptions? options) =>
         options?.ToolMode is RequiredChatToolMode ||

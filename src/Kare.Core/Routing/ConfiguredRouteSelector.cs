@@ -48,6 +48,7 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
         {
             return ValueTask.FromResult(LightDecision(
                 shape,
+                options,
                 "The caller explicitly selected the low-cost Copilot route."));
         }
 
@@ -55,6 +56,7 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
         {
             return ValueTask.FromResult(HeavyDecision(
                 shape,
+                options,
                 "The caller explicitly selected the heavy cloud route."));
         }
 
@@ -62,6 +64,7 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
         {
             return ValueTask.FromResult(ComplexDecision(
                 shape,
+                options,
                 "The caller explicitly selected the complex orchestration route."));
         }
 
@@ -72,6 +75,7 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
             {
                 return ValueTask.FromResult(ComplexDecision(
                     shape,
+                    options,
                     $"The automatic route selected the complex tier because the request reached the configured {_options.ComplexPromptCharacterThreshold}-character threshold."));
             }
 
@@ -81,6 +85,7 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
             {
                 return ValueTask.FromResult(LightDecision(
                     shape,
+                    options,
                     "The automatic route selected the moderate tier from the deterministic request-shape policy."));
             }
         }
@@ -97,9 +102,12 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
             IsBillable: false));
     }
 
-    private RouteDecision LightDecision(RequestShape shape, string reason)
+    private RouteDecision LightDecision(
+        RequestShape shape,
+        ChatOptions? options,
+        string reason)
     {
-        var candidates = Candidates(CloudModelTier.Fast, shape);
+        var candidates = Candidates(CloudModelTier.Fast, shape, options);
         var index = shape.ToolCount > 0 || shape.MessageCount >= 8
             ? candidates.Count - 1
             : Math.Min(
@@ -108,18 +116,26 @@ public sealed class ConfiguredRouteSelector : IRouteSelector
         return CloudDecision(candidates[index], reason);
     }
 
-    private RouteDecision HeavyDecision(RequestShape shape, string reason) =>
-        CloudDecision(Candidates(CloudModelTier.Heavy, shape)[0], reason);
+    private RouteDecision HeavyDecision(
+        RequestShape shape,
+        ChatOptions? options,
+        string reason) =>
+        CloudDecision(Candidates(CloudModelTier.Heavy, shape, options)[0], reason);
 
-    private RouteDecision ComplexDecision(RequestShape shape, string reason) =>
-        CloudDecision(Candidates(CloudModelTier.Complex, shape)[0], reason);
+    private RouteDecision ComplexDecision(
+        RequestShape shape,
+        ChatOptions? options,
+        string reason) =>
+        CloudDecision(Candidates(CloudModelTier.Complex, shape, options)[0], reason);
 
     private IReadOnlyList<CloudModelDescriptor> Candidates(
         CloudModelTier tier,
-        RequestShape shape)
+        RequestShape shape,
+        ChatOptions? options)
     {
         var candidates = _catalog.Models
             .Where(model => model.Tier == tier &&
+                RouteModePolicy.Allows(model, options) &&
                 (shape.ToolCount == 0 || model.SupportsTools) &&
                 (shape.ImageCount == 0 || model.SupportsImages))
             .OrderBy(static model => model.Priority)

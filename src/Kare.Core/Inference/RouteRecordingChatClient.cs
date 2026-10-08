@@ -15,7 +15,7 @@ public sealed class RouteRecordingChatClient : DelegatingChatClient
 {
     private readonly IRouteRecorder _recorder;
     private readonly ILogger<RouteRecordingChatClient> _logger;
-    private readonly RouteDecision _decision;
+    private RouteDecision _decision;
 
     /// <summary>Creates the recording client for a fixed route.</summary>
     public RouteRecordingChatClient(
@@ -38,6 +38,7 @@ public sealed class RouteRecordingChatClient : DelegatingChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        AddRoutingModeToDecision(options);
         var start = Stopwatch.GetTimestamp();
         ChatResponse response;
         try
@@ -88,6 +89,7 @@ public sealed class RouteRecordingChatClient : DelegatingChatClient
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        AddRoutingModeToDecision(options);
         var start = Stopwatch.GetTimestamp();
         long? firstToken = null;
         UsageDetails? usage = null;
@@ -124,6 +126,15 @@ public sealed class RouteRecordingChatClient : DelegatingChatClient
                 // The caller's token may already be cancelled. Recording must still happen,
                 // otherwise a cancelled request disappears from the accounting.
                 CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private void AddRoutingModeToDecision(ChatOptions? options)
+    {
+        var description = RouteModePolicy.Describe(options);
+        if (!_decision.Reason.Contains(description, StringComparison.Ordinal))
+        {
+            _decision = _decision with { Reason = $"{description} {_decision.Reason}" };
         }
     }
 
