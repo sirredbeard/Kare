@@ -118,6 +118,18 @@ public sealed class CloudModelRouteOptions
     /// <summary>Maximum provider output tokens when known.</summary>
     [Range(1, int.MaxValue)]
     public int? MaxOutputTokens { get; set; }
+
+    /// <summary>Average advertised input cost in USD per million tokens.</summary>
+    public decimal? AverageInputCostUsdPerMillionTokens { get; set; }
+
+    /// <summary>Average advertised output cost in USD per million tokens.</summary>
+    public decimal? AverageOutputCostUsdPerMillionTokens { get; set; }
+
+    /// <summary>Public source for the configured average model prices.</summary>
+    public string? PricingSource { get; set; }
+
+    /// <summary>Date the configured average model prices were checked.</summary>
+    public DateOnly? PricingAsOf { get; set; }
 }
 
 /// <summary>Credential source used by a cloud model route.</summary>

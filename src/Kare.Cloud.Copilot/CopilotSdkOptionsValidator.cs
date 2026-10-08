@@ -56,6 +56,28 @@ public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOpti
                     $"Cloud model {model.Id} requires ModelId.");
             }
 
+            var hasInputPrice = model.AverageInputCostUsdPerMillionTokens is not null;
+            var hasOutputPrice = model.AverageOutputCostUsdPerMillionTokens is not null;
+            if (hasInputPrice != hasOutputPrice)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Cloud model {model.Id} must configure both average input and output prices.");
+            }
+
+            if ((model.AverageInputCostUsdPerMillionTokens is < 0m ||
+                 model.AverageOutputCostUsdPerMillionTokens is < 0m))
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Cloud model {model.Id} average prices cannot be negative.");
+            }
+
+            if (hasInputPrice &&
+                (string.IsNullOrWhiteSpace(model.PricingSource) || model.PricingAsOf is null))
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Cloud model {model.Id} requires PricingSource and PricingAsOf when prices are configured.");
+            }
+
             if (model.Provider != Kare.Abstractions.CloudModelProvider.MicrosoftFoundry)
             {
                 if (model.Authentication != CloudAuthentication.Copilot)
