@@ -42,9 +42,15 @@ public static class DashboardMetrics
         double AverageTimeToFirstTokenMs,
         double AverageTotalDurationMs,
         double? AverageDecodeTokensPerSecond,
-        DateTime LastUsedAt);
+        DateTime LastUsedAt,
+        long PricedRequests,
+        long PricedInputTokens,
+        long PricedOutputTokens,
+        long SuccessfulPricedRequests,
+        long SuccessfulPricedInputTokens,
+        long SuccessfulPricedOutputTokens);
 
-    /// <summary>Configured model endpoint and its observed request totals.</summary>
+    /// <summary>Configured model endpoint, observed request totals, and approximate cost metadata.</summary>
     public sealed record ModelEndpoint(
         string Id,
         string Provider,
@@ -56,7 +62,16 @@ public static class DashboardMetrics
         long RequestCount,
         long InputTokens,
         long OutputTokens,
-        DateTime? LastUsedAt);
+        DateTime? LastUsedAt,
+        decimal? AverageInputCostUsdPerMillionTokens = null,
+        decimal? AverageOutputCostUsdPerMillionTokens = null,
+        string? PricingSource = null,
+        DateOnly? PricingAsOf = null,
+        decimal? EstimatedCostUsd = null,
+        long EstimatedCostRequests = 0,
+        decimal? EstimatedAvoidedCostUsd = null,
+        decimal? AverageEstimatedAvoidedCostPerRequestUsd = null,
+        long EstimatedAvoidedCostRequests = 0);
 
     /// <summary>
     /// High-level activity: routing decision, fallback event, or service action.

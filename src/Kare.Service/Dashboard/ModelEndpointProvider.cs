@@ -52,6 +52,17 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
         var observed = usage.Where(item =>
             item.ProviderRouteId is null &&
             !string.Equals(item.Backend, BackendKind.Remote.ToString(), StringComparison.Ordinal));
+        var pricedModels = _cloud.Models
+            .Where(static model =>
+                model.AverageInputCostUsdPerMillionTokens is not null &&
+                model.AverageOutputCostUsdPerMillionTokens is not null)
+            .ToArray();
+        decimal? averageInputPrice = pricedModels.Length == 0
+            ? null
+            : pricedModels.Average(static model => model.AverageInputCostUsdPerMillionTokens!.Value);
+        decimal? averageOutputPrice = pricedModels.Length == 0
+            ? null
+            : pricedModels.Average(static model => model.AverageOutputCostUsdPerMillionTokens!.Value);
 
         return Create(
             "local",
@@ -63,7 +74,12 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
                 : "in-process://onnx-genai",
             "Local",
             supportsTools: false,
-            observed);
+            observed,
+            averageInputPrice,
+            averageOutputPrice,
+            pricingSource: null,
+            pricingAsOf: null,
+            estimateAvoidedCost: true);
     }
 
     private static DashboardMetrics.ModelEndpoint CreateCloud(
@@ -84,7 +100,12 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
             endpoint,
             model.Tier.ToString(),
             model.SupportsTools,
-            observed);
+            observed,
+            model.AverageInputCostUsdPerMillionTokens,
+            model.AverageOutputCostUsdPerMillionTokens,
+            model.PricingSource,
+            model.PricingAsOf,
+            estimateAvoidedCost: false);
     }
 
     private static DashboardMetrics.ModelEndpoint Create(
@@ -95,9 +116,34 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
         string endpoint,
         string tier,
         bool supportsTools,
-        IEnumerable<DashboardMetrics.ModelUsage> observed)
+        IEnumerable<DashboardMetrics.ModelUsage> observed,
+        decimal? averageInputPrice,
+        decimal? averageOutputPrice,
+        string? pricingSource,
+        DateOnly? pricingAsOf,
+        bool estimateAvoidedCost)
     {
         var rows = observed.ToArray();
+        var inputTokens = rows.Sum(static item => item.PricedInputTokens);
+        var outputTokens = rows.Sum(static item => item.PricedOutputTokens);
+        var pricedRequests = rows.Sum(static item => item.PricedRequests);
+        var successfulPricedInputTokens = rows.Sum(static item => item.SuccessfulPricedInputTokens);
+        var successfulPricedOutputTokens = rows.Sum(static item => item.SuccessfulPricedOutputTokens);
+        var successfulPricedRequests = rows.Sum(static item => item.SuccessfulPricedRequests);
+        var hasPrices = averageInputPrice is not null && averageOutputPrice is not null;
+        var estimatedCost = !estimateAvoidedCost && hasPrices && pricedRequests > 0
+            ? EstimateCost(inputTokens, outputTokens, averageInputPrice!.Value, averageOutputPrice!.Value)
+            : null;
+        var estimatedAvoidedCost = estimateAvoidedCost &&
+            hasPrices &&
+            successfulPricedRequests > 0
+                ? EstimateCost(
+                    successfulPricedInputTokens,
+                    successfulPricedOutputTokens,
+                    averageInputPrice!.Value,
+                    averageOutputPrice!.Value)
+                : null;
+
         return new DashboardMetrics.ModelEndpoint(
             id,
             provider,
@@ -109,6 +155,24 @@ public sealed class ModelEndpointProvider : IModelEndpointProvider
             rows.Sum(static item => item.RequestCount),
             rows.Sum(static item => item.InputTokens),
             rows.Sum(static item => item.OutputTokens),
-            rows.Length == 0 ? null : rows.Max(static item => item.LastUsedAt));
+            rows.Length == 0 ? null : rows.Max(static item => item.LastUsedAt),
+            estimateAvoidedCost ? null : averageInputPrice,
+            estimateAvoidedCost ? null : averageOutputPrice,
+            pricingSource,
+            pricingAsOf,
+            estimatedCost,
+            hasPrices ? pricedRequests : 0,
+            estimatedAvoidedCost,
+            estimatedAvoidedCost is null
+                ? null
+                : estimatedAvoidedCost.Value / successfulPricedRequests,
+            estimateAvoidedCost && hasPrices ? successfulPricedRequests : 0);
     }
+
+    private static decimal EstimateCost(
+        long inputTokens,
+        long outputTokens,
+        decimal inputPrice,
+        decimal outputPrice) =>
+        ((inputTokens * inputPrice) + (outputTokens * outputPrice)) / 1_000_000m;
 }
