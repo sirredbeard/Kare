@@ -120,6 +120,24 @@ public sealed class CopilotLauncherTests
     }
 
     [Fact]
+    public void SshTunnelWaitsForAuthenticationBeforeBackgrounding()
+    {
+        var arguments = CopilotKareApp.BuildSshArguments(
+            "arduino",
+            "device.example",
+            "5285",
+            "5285",
+            "/tmp/kare-control.sock");
+
+        Assert.Contains("-M", arguments);
+        Assert.Contains("-f", arguments);
+        Assert.Contains("-S", arguments);
+        Assert.Contains("/tmp/kare-control.sock", arguments);
+        Assert.Contains("-o", arguments);
+        Assert.Contains("ExitOnForwardFailure=yes", arguments);
+    }
+
+    [Fact]
     public void ResolvePrefersExplicitDeviceHostOverEnvironmentAndConfig()
     {
         const string environmentVariable = "KARE_DEVICE_HOST";

@@ -36,3 +36,14 @@ Updated 2026-10-08 on the VENTUNO Q.
 - Set explicit Personal and Work route permissions in protected configuration
   after the approved Work provider is confirmed. Do not commit that configuration.
 - Work-provider mapping remains an explicit route boundary, not repository ownership or authentication.
+
+## Issue #15
+
+- Reproduced the plain-terminal failure with the published launcher artifact.
+- The launcher now waits for SSH authentication and tunnel establishment before
+  checking `/health` or starting Copilot.
+- SSH uses a private control socket and backgrounds only after authentication.
+- Added a regression test for the control-master arguments.
+- Current validation: 158 tests passed. The service build passed with one
+  transient file-lock warning caused by parallel test and build execution; rerun
+  serially before the fix PR.
