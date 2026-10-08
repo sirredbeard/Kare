@@ -1,3 +1,4 @@
+using Kare.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Kare.Cloud.Copilot;
@@ -5,6 +6,8 @@ namespace Kare.Cloud.Copilot;
 /// <summary>Validates conditional cloud configuration without reading secret values.</summary>
 public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOptions>
 {
+    private const decimal MaxAverageTokenPriceUsdPerMillion = 1_000_000m;
+
     /// <inheritdoc />
     public ValidateOptionsResult Validate(string? name, CopilotSdkOptions options)
     {
@@ -44,6 +47,13 @@ public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOpti
         var routeIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var model in options.Models)
         {
+            if (model.AllowedModes.Count == 0 ||
+                model.AllowedModes.Any(mode => mode is not (RouteMode.Personal or RouteMode.Work or RouteMode.Both)))
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Cloud model {model.Id} must allow Personal, Work, or Both routing modes.");
+            }
+
             if (string.IsNullOrWhiteSpace(model.Id) || !routeIds.Add(model.Id))
             {
                 return ValidateOptionsResult.Fail(
@@ -54,6 +64,35 @@ public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOpti
             {
                 return ValidateOptionsResult.Fail(
                     $"Cloud model {model.Id} requires ModelId.");
+            }
+
+            var hasInputPrice = model.AverageInputCostUsdPerMillionTokens is not null;
+            var hasOutputPrice = model.AverageOutputCostUsdPerMillionTokens is not null;
+            if (hasInputPrice != hasOutputPrice)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Cloud model {model.Id} must configure both average input and output prices.");
+            }
+
+            if ((model.AverageInputCostUsdPerMillionTokens is { } inputPrice &&
+                 (inputPrice < 0m || inputPrice > MaxAverageTokenPriceUsdPerMillion)) ||
+                (model.AverageOutputCostUsdPerMillionTokens is { } outputPrice &&
+                 (outputPrice < 0m || outputPrice > MaxAverageTokenPriceUsdPerMillion)))
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Cloud model {model.Id} average prices must be between zero and {MaxAverageTokenPriceUsdPerMillion} USD per million tokens.");
+            }
+
+            if (hasInputPrice &&
+                (!Uri.TryCreate(model.PricingSource, UriKind.Absolute, out var pricingSource) ||
+                 pricingSource.Scheme != Uri.UriSchemeHttps ||
+                 pricingSource.UserInfo.Length > 0 ||
+                 pricingSource.Query.Length > 0 ||
+                 pricingSource.Fragment.Length > 0 ||
+                 model.PricingAsOf is null))
+            {
+                return ValidateOptionsResult.Fail(
+                    $"Cloud model {model.Id} requires a public HTTPS PricingSource without credentials, query, or fragment and a PricingAsOf date when prices are configured.");
             }
 
             if (model.Provider != Kare.Abstractions.CloudModelProvider.MicrosoftFoundry)

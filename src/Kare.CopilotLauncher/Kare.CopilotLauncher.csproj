@@ -16,6 +16,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Kare.Abstractions\Kare.Abstractions.csproj" />
     <InternalsVisibleTo Include="Kare.Tests" />
   </ItemGroup>
 

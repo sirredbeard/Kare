@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
+using Kare.Abstractions;
 
 namespace Kare.CopilotLauncher;
 
@@ -73,6 +74,10 @@ internal sealed class CopilotKareApp
         var configFile = GetConfigFilePath();
         var configValues = ConfigFile.Load(configFile);
         var configDirectory = Path.GetDirectoryName(configFile) ?? GetDefaultConfigDirectory();
+        var routingMode = RoutingModeResolver.Resolve(
+            input.WorkMode,
+            configValues,
+            RoutingModeResolver.ReadGitRemotes());
         var lastDeviceHostFile = Path.Combine(configDirectory, LastDeviceHostFileName);
         var deviceHost = DeviceHostResolver.Resolve(input.DeviceHost, configValues, lastDeviceHostFile);
 
@@ -130,9 +135,15 @@ internal sealed class CopilotKareApp
 
             WriteLastDeviceHost(configDirectory, lastDeviceHostFile, deviceHost);
 
-            Console.WriteLine($"Kare is ready at {healthBaseUrl}. Starting GitHub Copilot with the BYOK provider.");
+            Console.WriteLine(
+                $"Kare is ready at {healthBaseUrl}. Routing mode: {routingMode.Mode} ({routingMode.Reason}). Starting GitHub Copilot with the BYOK provider.");
 
-            using var copilotProcess = StartCopilot(input, configValues, healthBaseUrl, configDirectory);
+            using var copilotProcess = StartCopilot(
+                input,
+                configValues,
+                healthBaseUrl,
+                configDirectory,
+                routingMode);
             await copilotProcess.WaitForExitAsync();
             return copilotProcess.ExitCode;
         }
@@ -338,7 +349,8 @@ internal sealed class CopilotKareApp
         LauncherInput input,
         IReadOnlyDictionary<string, string> configValues,
         string healthBaseUrl,
-        string configDirectory)
+        string configDirectory,
+        RoutingModeSelection routingMode)
     {
         var copilotHome = GetSetting(
             configValues,
@@ -364,6 +376,9 @@ internal sealed class CopilotKareApp
             GetSetting(configValues, "KARE_MAX_PROMPT_TOKENS", input.MinimalContext ? "7936" : "31744");
         startInfo.Environment["COPILOT_PROVIDER_MAX_OUTPUT_TOKENS"] =
             GetSetting(configValues, "KARE_MAX_OUTPUT_TOKENS", input.MinimalContext ? "256" : "1024");
+        startInfo.Environment["COPILOT_PROVIDER_HEADERS"] = BuildProviderHeaders(
+            GetSetting(configValues, "KARE_PROVIDER_HEADERS"),
+            routingMode);
         startInfo.Environment["COPILOT_HOME"] = copilotHome;
 
         if (input.MinimalContext)
@@ -408,6 +423,21 @@ internal sealed class CopilotKareApp
         }
 
         return Process.Start(startInfo) ?? throw new InvalidOperationException("GitHub Copilot did not start.");
+    }
+
+    private static string BuildProviderHeaders(
+        string configuredHeaders,
+        RoutingModeSelection routingMode)
+    {
+        var headers = configuredHeaders
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(static header =>
+                !header.StartsWith("X-Kare-Routing-Mode:", StringComparison.OrdinalIgnoreCase) &&
+                !header.StartsWith("X-Kare-Routing-Reason:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        headers.Add($"X-Kare-Routing-Mode: {routingMode.Mode}");
+        headers.Add($"X-Kare-Routing-Reason: {routingMode.Reason}");
+        return string.Join(Environment.NewLine, headers);
     }
 
     private static void AddArgumentUnlessPresent(
@@ -490,6 +520,7 @@ internal sealed class CopilotKareApp
         Console.WriteLine("  --kare-verbose          Capture Copilot CLI debug logs in protected local storage.");
         Console.WriteLine("  --kare-log-dir PATH     Use PATH for Copilot CLI logs. Implies --kare-verbose.");
         Console.WriteLine("  --kare-minimal-context  Use the offline 8192-token diagnostic profile with only bash.");
+        Console.WriteLine("  --kare-work             Force Work mode for this session.");
         Console.WriteLine();
         Console.WriteLine("The default profile advertises a 32768-token routed context with Copilot tools,");
         Console.WriteLine("builtin MCP servers, and repository instructions enabled.");
@@ -505,6 +536,7 @@ internal sealed record LauncherInput(
     bool Verbose,
     string? LogDirectory,
     bool MinimalContext,
+    bool WorkMode,
     string? Error);
 
 internal static class LauncherInputParser
@@ -516,6 +548,7 @@ internal static class LauncherInputParser
         string? logDirectory = null;
         var verbose = false;
         var minimalContext = false;
+        var workMode = false;
         var parseLauncherOptions = true;
 
         for (var index = 0; index < args.Length; index++)
@@ -529,7 +562,7 @@ internal static class LauncherInputParser
 
             if (parseLauncherOptions && IsHelpArgument(argument))
             {
-                return new LauncherInput(null, [], true, false, null, false, null);
+                return new LauncherInput(null, [], true, false, null, false, false, null);
             }
 
             if (parseLauncherOptions && argument is "--kare-verbose")
@@ -541,6 +574,12 @@ internal static class LauncherInputParser
             if (parseLauncherOptions && argument is "--kare-minimal-context")
             {
                 minimalContext = true;
+                continue;
+            }
+
+            if (parseLauncherOptions && argument is "--kare-work")
+            {
+                workMode = true;
                 continue;
             }
 
@@ -589,10 +628,11 @@ internal static class LauncherInputParser
             verbose,
             logDirectory,
             minimalContext,
+            workMode,
             null);
 
         static LauncherInput Error(string message) =>
-            new(null, [], false, false, null, false, message);
+            new(null, [], false, false, null, false, false, message);
     }
 
     private static bool IsHelpArgument(string argument)

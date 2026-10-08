@@ -1,3 +1,4 @@
+using Kare.Abstractions;
 using System.ComponentModel.DataAnnotations;
 
 namespace Kare.Service.Options;
@@ -47,4 +48,10 @@ public sealed class KareServiceOptions
     /// </summary>
     [Range(4_096, 64 * 1024 * 1024)]
     public int MaxRequestBodyBytes { get; set; } = 8 * 1024 * 1024;
+
+    /// <summary>
+    /// Safe default provider boundary. Work mode must be selected explicitly until
+    /// protected repository mapping is implemented.
+    /// </summary>
+    public RouteMode DefaultRoutingMode { get; set; } = RouteMode.Personal;
 }

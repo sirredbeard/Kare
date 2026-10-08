@@ -100,4 +100,90 @@ public sealed class CopilotSdkOptionsValidatorTests
 
         Assert.True(result.Failed);
     }
+
+    [Fact]
+    public void AverageModelPricesRequireBothRatesAndPricingProvenance()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(new CloudModelRouteOptions
+        {
+            Id = "copilot-fast",
+            ModelId = "model",
+            AverageInputCostUsdPerMillionTokens = 1m,
+        });
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void AverageModelPricesAcceptNonNegativeRatesWithSourceAndDate()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(new CloudModelRouteOptions
+        {
+            Id = "copilot-fast",
+            ModelId = "model",
+            AverageInputCostUsdPerMillionTokens = 0m,
+            AverageOutputCostUsdPerMillionTokens = 5m,
+            PricingSource = "https://pricing.example/models",
+            PricingAsOf = new DateOnly(2026, 10, 1),
+        });
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void AverageModelPricesRejectNegativeRates()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(new CloudModelRouteOptions
+        {
+            Id = "copilot-fast",
+            ModelId = "model",
+            AverageInputCostUsdPerMillionTokens = -1m,
+            AverageOutputCostUsdPerMillionTokens = 5m,
+            PricingSource = "https://pricing.example/models",
+            PricingAsOf = new DateOnly(2026, 10, 1),
+        });
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void CloudModelAllowsBothRoutingModesAsOneFlag()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(new CloudModelRouteOptions
+        {
+            Id = "copilot-fast",
+            ModelId = "model",
+            AllowedModes = [Kare.Abstractions.RouteMode.Both],
+        });
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void CloudModelRejectsEmptyRoutingModes()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(new CloudModelRouteOptions
+        {
+            Id = "copilot-fast",
+            ModelId = "model",
+            AllowedModes = [],
+        });
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
 }

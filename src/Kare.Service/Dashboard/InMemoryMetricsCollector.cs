@@ -253,6 +253,12 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
         private long _fallback;
         private long _inputTokens;
         private long _outputTokens;
+        private long _pricedRequests;
+        private long _pricedInputTokens;
+        private long _pricedOutputTokens;
+        private long _successfulPricedRequests;
+        private long _successfulPricedInputTokens;
+        private long _successfulPricedOutputTokens;
         private double _timeToFirstTokenMs;
         private double _totalDurationMs;
         private double _decodeRate;
@@ -279,6 +285,20 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
 
             _inputTokens += request.InputTokens ?? 0;
             _outputTokens += request.OutputTokens ?? 0;
+            if (request.InputTokens is { } inputTokens &&
+                request.OutputTokens is { } outputTokens)
+            {
+                _pricedRequests++;
+                _pricedInputTokens += inputTokens;
+                _pricedOutputTokens += outputTokens;
+                if (request.Succeeded)
+                {
+                    _successfulPricedRequests++;
+                    _successfulPricedInputTokens += inputTokens;
+                    _successfulPricedOutputTokens += outputTokens;
+                }
+            }
+
             _timeToFirstTokenMs += request.TimeToFirstTokenMs;
             _totalDurationMs += request.TotalDurationMs;
             _lastUsedAt = request.Timestamp;
@@ -306,6 +326,12 @@ public sealed class InMemoryMetricsCollector : IDashboardMetricsCollector
                 _timeToFirstTokenMs / _requests,
                 _totalDurationMs / _requests,
                 _decodeRateSamples == 0 ? null : _decodeRate / _decodeRateSamples,
-                _lastUsedAt);
+                _lastUsedAt,
+                _pricedRequests,
+                _pricedInputTokens,
+                _pricedOutputTokens,
+                _successfulPricedRequests,
+                _successfulPricedInputTokens,
+                _successfulPricedOutputTokens);
     }
 }

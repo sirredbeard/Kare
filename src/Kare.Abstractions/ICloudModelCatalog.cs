@@ -1,3 +1,5 @@
+using Microsoft.Extensions.AI;
+
 namespace Kare.Abstractions;
 
 /// <summary>
@@ -43,7 +45,8 @@ public sealed record CloudModelDescriptor(
     CloudModelTier Tier,
     int Priority,
     bool SupportsTools,
-    bool SupportsImages = false)
+    bool SupportsImages = false,
+    RouteMode AllowedModes = RouteMode.Both)
 {
     /// <summary>Route recorded when this model serves a request.</summary>
     public KareRoute Route => Provider == CloudModelProvider.MicrosoftFoundry
@@ -51,6 +54,60 @@ public sealed record CloudModelDescriptor(
         : Tier == CloudModelTier.Fast
             ? KareRoute.CopilotLight
             : KareRoute.CopilotHeavy;
+}
+
+/// <summary>Provider boundary selected for a request.</summary>
+[Flags]
+public enum RouteMode
+{
+    /// <summary>Personal repositories and accounts.</summary>
+    Personal = 1,
+
+    /// <summary>Work-owned repositories and accounts.</summary>
+    Work = 2,
+
+    /// <summary>Allow the route in either boundary.</summary>
+    Both = Personal | Work,
+}
+
+/// <summary>Shared routing-mode metadata carried through a Kare request.</summary>
+public static class RouteModePolicy
+{
+    /// <summary>Request option containing the selected provider boundary.</summary>
+    public const string ModeOptionName = "kare.routing.mode";
+
+    /// <summary>Request option containing why the boundary was selected.</summary>
+    public const string ReasonOptionName = "kare.routing.reason";
+
+    /// <summary>Returns the validated request boundary, defaulting to Personal.</summary>
+    public static RouteMode GetMode(ChatOptions? options)
+    {
+        if (options?.AdditionalProperties?.TryGetValue(ModeOptionName, out var value) == true &&
+            value is string text &&
+            Enum.TryParse<RouteMode>(text, ignoreCase: true, out var mode) &&
+            mode is RouteMode.Personal or RouteMode.Work)
+        {
+            return mode;
+        }
+
+        return RouteMode.Personal;
+    }
+
+    /// <summary>Returns whether a model is allowed to receive the request.</summary>
+    public static bool Allows(CloudModelDescriptor model, ChatOptions? options) =>
+        (model.AllowedModes & GetMode(options)) != 0;
+
+    /// <summary>Returns privacy-safe mode metadata for route records.</summary>
+    public static string Describe(ChatOptions? options)
+    {
+        var mode = GetMode(options);
+        var reason = options?.AdditionalProperties?.TryGetValue(ReasonOptionName, out var value) == true
+            ? value?.ToString()
+            : null;
+        return string.IsNullOrWhiteSpace(reason)
+            ? $"Routing mode: {mode}."
+            : $"Routing mode: {mode} ({reason}).";
+    }
 }
 
 /// <summary>Supported direct cloud providers.</summary>

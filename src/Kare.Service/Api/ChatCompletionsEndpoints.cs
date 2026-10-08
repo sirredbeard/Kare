@@ -97,6 +97,10 @@ public static class ChatCompletionsEndpoints
             messages = OpenAiTranslator.ToChatMessages(request.Messages);
             responseModelId = modelId;
             chatOptions = OpenAiTranslator.ToChatOptions(request, modelId);
+            AddRoutingMode(
+                chatOptions,
+                serviceOptions.Value.DefaultRoutingMode,
+                context.Request.Headers);
             AddCacheFingerprints(
                 chatOptions,
                 knowledge,
@@ -224,7 +228,14 @@ public static class ChatCompletionsEndpoints
         options.AdditionalProperties[ResponseCache.ContextFingerprintOptionName] =
             knowledge.ContextVersion;
         options.AdditionalProperties[ResponseCache.RoutePolicyVersionOptionName] =
-            ComputeRoutePolicyFingerprint(routePolicy);
+            ComputeRoutePolicyFingerprint(
+                routePolicy,
+                options.AdditionalProperties.TryGetValue(RouteModePolicy.ModeOptionName, out var mode)
+                    ? mode
+                    : null,
+                options.AdditionalProperties.TryGetValue(RouteModePolicy.ReasonOptionName, out var reason)
+                    ? reason
+                    : null);
         if (headers.TryGetValue("X-Kare-Repository-Fingerprint", out var values) &&
             values.Count > 0)
         {
@@ -245,7 +256,85 @@ public static class ChatCompletionsEndpoints
         }
     }
 
-    private static string ComputeRoutePolicyFingerprint(RoutePolicyOptions options)
+    private static void AddRoutingMode(
+        ChatOptions options,
+        RouteMode defaultMode,
+        IHeaderDictionary headers)
+    {
+        var mode = defaultMode;
+        var reason = defaultMode == RouteMode.Work ? "configured_work" : "default_personal";
+        var hasReasonHeader = false;
+        if (headers.TryGetValue("X-Kare-Routing-Mode", out var values) &&
+            values.Count > 0 &&
+            (!Enum.TryParse(values[0], ignoreCase: true, out mode) ||
+             mode is not (RouteMode.Personal or RouteMode.Work)))
+        {
+            throw new InvalidRequestException(
+                "X-Kare-Routing-Mode must be Personal or Work.",
+                "invalid_routing_mode");
+        }
+
+        if (mode is not (RouteMode.Personal or RouteMode.Work))
+        {
+            throw new InvalidOperationException(
+                "Kare:Service:DefaultRoutingMode must be Personal or Work.");
+        }
+
+        if (headers.TryGetValue("X-Kare-Routing-Reason", out var reasonValues) &&
+            reasonValues.Count > 0)
+        {
+            reason = reasonValues[0];
+            hasReasonHeader = true;
+        }
+
+        if (!hasReasonHeader)
+        {
+            reason = mode == RouteMode.Work ? "configured_work" : "default_personal";
+        }
+
+        if (reason is not (
+            "default_personal" or
+            "configured_work" or
+            "explicit_work" or
+            "protected_mapping" or
+            "org_match" or
+            "upstream_match"))
+        {
+            throw new InvalidRequestException(
+                "X-Kare-Routing-Reason is not a recognized routing selection reason.",
+                "invalid_routing_reason");
+        }
+
+        if (mode == RouteMode.Work &&
+            reason is "default_personal")
+        {
+            throw new InvalidRequestException(
+                "Work routing requires a work routing selection reason.",
+                "invalid_routing_reason");
+        }
+
+        if (mode == RouteMode.Personal &&
+            reason is (
+                "configured_work" or
+                "explicit_work" or
+                "protected_mapping" or
+                "org_match" or
+                "upstream_match"))
+        {
+            throw new InvalidRequestException(
+                "Personal routing cannot use a work routing selection reason.",
+                "invalid_routing_reason");
+        }
+
+        options.AdditionalProperties ??= new();
+        options.AdditionalProperties[RouteModePolicy.ModeOptionName] = mode.ToString();
+        options.AdditionalProperties[RouteModePolicy.ReasonOptionName] = reason;
+    }
+
+    private static string ComputeRoutePolicyFingerprint(
+        RoutePolicyOptions options,
+        object? routingMode,
+        object? routingReason)
     {
         var value = string.Join(
             "\n",
@@ -266,7 +355,9 @@ public static class ChatCompletionsEndpoints
             options.CascadeCritiqueMaxInputCharacters,
             options.CascadeCritiqueMaxOutputTokens,
             options.ModeratePromptCharacterThreshold,
-            options.ComplexPromptCharacterThreshold);
+            options.ComplexPromptCharacterThreshold,
+            routingMode,
+            routingReason);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     }
 

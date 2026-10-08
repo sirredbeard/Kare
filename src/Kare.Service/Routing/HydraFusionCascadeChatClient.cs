@@ -69,7 +69,8 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         var requiresImages = RequiresImages(materialized);
         var candidates = GetCandidates(
             requiresTools || options?.Tools is { Count: > 0 },
-            requiresImages);
+            requiresImages,
+            options);
         if (!_options.EnableCascadeEscalation)
         {
             if (requiresImages)
@@ -171,7 +172,8 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
         var requiresImages = RequiresImages(materialized);
         var candidates = GetCandidates(
             requiresTools || options?.Tools is { Count: > 0 },
-            requiresImages);
+            requiresImages,
+            options);
         if (!_options.EnableCascadeEscalation)
         {
             if (requiresImages)
@@ -758,9 +760,11 @@ public sealed class HydraFusionCascadeChatClient : IChatClient
 
     private IReadOnlyList<CloudModelDescriptor> GetCandidates(
         bool requiresTools,
-        bool requiresImages) =>
+        bool requiresImages,
+        ChatOptions? options) =>
         _catalog.Models
             .Where(model =>
+                RouteModePolicy.Allows(model, options) &&
                 (!requiresTools || model.SupportsTools) &&
                 (!requiresImages || model.SupportsImages))
             .OrderBy(static model => model.Priority)

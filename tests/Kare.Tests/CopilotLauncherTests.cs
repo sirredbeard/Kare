@@ -15,6 +15,7 @@ public sealed class CopilotLauncherTests
         Assert.False(result.ShowHelp);
         Assert.False(result.Verbose);
         Assert.False(result.MinimalContext);
+        Assert.False(result.WorkMode);
         Assert.Null(result.Error);
     }
 
@@ -37,6 +38,7 @@ public sealed class CopilotLauncherTests
         Assert.True(result.Verbose);
         Assert.Equal("/tmp/kare-logs", result.LogDirectory);
         Assert.True(result.MinimalContext);
+        Assert.False(result.WorkMode);
         Assert.Equal(["-p", "test"], result.CopilotArguments);
         Assert.Null(result.Error);
     }
@@ -69,6 +71,52 @@ public sealed class CopilotLauncherTests
         Assert.True(result.Verbose);
         Assert.False(result.ShowHelp);
         Assert.Equal(["--help"], result.CopilotArguments);
+    }
+
+    [Fact]
+    public void ParseSupportsExplicitWorkMode()
+    {
+        var result = LauncherInputParser.Parse(["--kare-work", "-i", "Review this repository"]);
+
+        Assert.True(result.WorkMode);
+        Assert.Equal(["-i", "Review this repository"], result.CopilotArguments);
+        Assert.Null(result.Error);
+    }
+
+    [Fact]
+    public void WorkModeMatchesProtectedRepositoryAndOrganizationMappings()
+    {
+        var config = new Dictionary<string, string>
+        {
+            ["KARE_WORK_REPOSITORIES"] = "sirredbeard/Kare",
+            ["KARE_WORK_ORGANIZATIONS"] = "example-work",
+        };
+
+        var repository = RoutingModeResolver.Resolve(
+            explicitWork: false,
+            config,
+            [new GitRemote("sirredbeard", "Kare", false)]);
+        var organization = RoutingModeResolver.Resolve(
+            explicitWork: false,
+            config,
+            [new GitRemote("example-work", "project", false)]);
+
+        Assert.Equal(Kare.Abstractions.RouteMode.Work, repository.Mode);
+        Assert.Equal("protected_mapping", repository.Reason);
+        Assert.Equal(Kare.Abstractions.RouteMode.Work, organization.Mode);
+        Assert.Equal("org_match", organization.Reason);
+    }
+
+    [Fact]
+    public void WorkModeUsesUpstreamMatchForAWorkOwnedUpstream()
+    {
+        var result = RoutingModeResolver.Resolve(
+            explicitWork: false,
+            new Dictionary<string, string>(),
+            [new GitRemote("dotnet", "runtime", true)]);
+
+        Assert.Equal(Kare.Abstractions.RouteMode.Work, result.Mode);
+        Assert.Equal("upstream_match", result.Reason);
     }
 
     [Fact]

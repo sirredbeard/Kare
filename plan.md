@@ -46,7 +46,7 @@ Request-specific source, skill, and MCP metadata selection is now implemented, a
 - Intake has no cloud escalation path: when local structured interpretation of ambiguous paste text is invalid, the proposal stays in `Review` rather than calling cloud, by design, until a safe escalation policy without a `ContextEnrichingChatClient` DI cycle or hidden billing is designed.
 - The crawler does not yet enforce path-prefix allow/deny lists beyond the existing pattern match and public-address validation.
 - Dashboard workload counters are sampled after inference completes, so active requests can appear as zero during live work.
-- Model call accounting does not yet show published-price spend estimates or local avoided cost.
+- Model call accounting now supports published-price estimates from the protected model catalog and average-price local savings. Live provider budgets remain out of scope.
 
 The target path is:
 
@@ -68,7 +68,7 @@ request
 
 1. **Finish NPU lifecycle ownership.** Keep the warning and bounded health state machine, then replace the temporary systemd command bridge with a Kare-owned GenieX process boundary. Do not reboot the device automatically.
 2. **#4 context broker intake: done.** One-field source, skill, and MCP paste intake, structured proposals (`DashboardIntakeService`), preview/approval for ambiguous or risky input, deterministic validation, provenance, refresh state, protected persistence, endpoint redaction, pre-seeded built-in skills, and classification descriptors (topics/headings/tags/keywords) are implemented and tested. Open gap: no cloud escalation for unresolved intake text; it stays in `Review` instead.
-3. **Fix live dashboard accounting.** Read queue and active inference state while requests are running. Add versioned published-price estimates, cloud-equivalent local savings, and explicit unknown-price behavior.
+3. **Finish live dashboard accounting.** Read queue and active inference state while requests are running. Pricing estimates use sourced, dated average rates from the protected model catalog, show unknowns when rates or tokens are unavailable, and do not query remaining provider budgets.
 4. **Tighten remaining cache identity.** Add source chunks, MCP result hashes, privacy class, intake-skill version, parser version, and accepted proposal hashes where each cache needs them.
 5. **Complete the measured #5 policy.** Keep the bounded route gate, result checks, judge, critique, sticky provider routing, and complete accounting. Add a representative corpus and tune from device measurements.
 6. **Land #6 against the versioned records.** Stream state changes to Azure PostgreSQL, write six-hour manifests, retain 14 days of device restore points, and test both point-in-time recovery and a new-device clone.
