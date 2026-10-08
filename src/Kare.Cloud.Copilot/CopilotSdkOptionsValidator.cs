@@ -48,10 +48,10 @@ public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOpti
         foreach (var model in options.Models)
         {
             if (model.AllowedModes.Count == 0 ||
-                model.AllowedModes.Any(mode => mode is not (RouteMode.Personal or RouteMode.Work)))
+                model.AllowedModes.Any(mode => mode is not (RouteMode.Personal or RouteMode.Work or RouteMode.Both)))
             {
                 return ValidateOptionsResult.Fail(
-                    $"Cloud model {model.Id} must allow Personal or Work routing modes.");
+                    $"Cloud model {model.Id} must allow Personal, Work, or Both routing modes.");
             }
 
             if (string.IsNullOrWhiteSpace(model.Id) || !routeIds.Add(model.Id))

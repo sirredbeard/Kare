@@ -314,6 +314,31 @@ public sealed class HydraFusionCascadeChatClientTests
     }
 
     [Fact]
+    public async Task WorkRoutingModeExcludesPersonalOnlyCloudModels()
+    {
+        var local = new ScriptedChatClient((_, _) =>
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "KARE_ESCALATE:strong")));
+        var cloud = new ScriptedCloudBackend();
+        using var cache = CreateCache();
+        using var client = CreateClient(local, cloud, cache);
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new()
+            {
+                ["kare.routing.mode"] = RouteMode.Work.ToString(),
+            },
+        };
+
+        var response = await client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Use the work route.")],
+            options,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("cloud-strong", response.Text);
+        Assert.Equal(["strong"], cloud.ModelsCalled);
+    }
+
+    [Fact]
     public async Task ImageRequestSkipsLocalGateAndUsesImageCapableCloudTarget()
     {
         var local = new ScriptedChatClient((_, _) =>
@@ -400,7 +425,8 @@ public sealed class HydraFusionCascadeChatClientTests
                     CloudModelTier.Fast,
                     Priority: 10,
                     SupportsTools: true,
-                    SupportsImages: true),
+                    SupportsImages: true,
+                    AllowedModes: RouteMode.Personal),
                 new CloudModelDescriptor(
                     "no-tools",
                     "no-tools-model",
@@ -415,7 +441,8 @@ public sealed class HydraFusionCascadeChatClientTests
                     CloudModelTier.Heavy,
                     Priority: 20,
                     SupportsTools: true,
-                    SupportsImages: true),
+                    SupportsImages: true,
+                    AllowedModes: RouteMode.Both),
             ]),
             new NullRouteRecorder(),
             cache,

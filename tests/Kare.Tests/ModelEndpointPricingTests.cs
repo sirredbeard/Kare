@@ -135,7 +135,11 @@ public sealed class ModelEndpointPricingTests
         return new ModelEndpointProvider(
             selected,
             Options.Create(new GenieXOptions()),
-            Options.Create(new CopilotSdkOptions { Models = [.. models] }));
+            Options.Create(new CopilotSdkOptions
+            {
+                Enabled = true,
+                Models = [.. models],
+            }));
     }
 
     private static DashboardMetrics.RequestMetric CreateRequest(

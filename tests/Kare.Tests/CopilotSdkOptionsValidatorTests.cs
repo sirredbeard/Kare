@@ -154,4 +154,36 @@ public sealed class CopilotSdkOptionsValidatorTests
 
         Assert.True(result.Failed);
     }
+
+    [Fact]
+    public void CloudModelAllowsBothRoutingModesAsOneFlag()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(new CloudModelRouteOptions
+        {
+            Id = "copilot-fast",
+            ModelId = "model",
+            AllowedModes = [Kare.Abstractions.RouteMode.Both],
+        });
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void CloudModelRejectsEmptyRoutingModes()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(new CloudModelRouteOptions
+        {
+            Id = "copilot-fast",
+            ModelId = "model",
+            AllowedModes = [],
+        });
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
 }
