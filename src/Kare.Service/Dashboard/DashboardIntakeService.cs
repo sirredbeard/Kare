@@ -44,6 +44,8 @@ public sealed partial class DashboardIntakeService : IDashboardIntakeService
     private readonly Dictionary<string, IntakeProposal> _proposals = new(StringComparer.Ordinal);
     private readonly IDashboardKnowledgeService _knowledge;
     private readonly SelectedBackendChatClient? _localModel;
+    private readonly IChatClient? _cloudModel;
+    private readonly bool _allowCloudEscalation;
     private readonly ILogger<DashboardIntakeService> _logger;
     private readonly string _statePath;
     private readonly SemaphoreSlim _persistGate = new(1, 1);
@@ -51,8 +53,10 @@ public sealed partial class DashboardIntakeService : IDashboardIntakeService
     public DashboardIntakeService(
         IDashboardKnowledgeService knowledge,
         ILogger<DashboardIntakeService> logger,
-        SelectedBackendChatClient? localModel = null)
-        : this(knowledge, logger, GetDefaultStatePath(), localModel)
+        SelectedBackendChatClient? localModel = null,
+        IChatClient? cloudModel = null,
+        bool allowCloudEscalation = false)
+        : this(knowledge, logger, GetDefaultStatePath(), localModel, cloudModel, allowCloudEscalation)
     {
     }
 
@@ -60,7 +64,9 @@ public sealed partial class DashboardIntakeService : IDashboardIntakeService
         IDashboardKnowledgeService knowledge,
         ILogger<DashboardIntakeService> logger,
         string statePath,
-        SelectedBackendChatClient? localModel = null)
+        SelectedBackendChatClient? localModel = null,
+        IChatClient? cloudModel = null,
+        bool allowCloudEscalation = false)
     {
         ArgumentNullException.ThrowIfNull(knowledge);
         ArgumentNullException.ThrowIfNull(logger);
@@ -73,6 +79,8 @@ public sealed partial class DashboardIntakeService : IDashboardIntakeService
         _logger = logger;
         _statePath = statePath;
         _localModel = localModel;
+        _cloudModel = cloudModel;
+        _allowCloudEscalation = allowCloudEscalation;
         Load();
     }
 
@@ -112,6 +120,25 @@ public sealed partial class DashboardIntakeService : IDashboardIntakeService
                 trimmed,
                 classification,
                 cancellationToken).ConfigureAwait(false);
+
+            // Cloud escalation is off unless the protected configuration turns
+            // it on. It runs only when the local pass produced no usable
+            // interpretation, and a cloud-read proposal always stays in review:
+            // the call is billable, so it is never hidden and never auto-applied.
+            if (classification.CanonicalName is null &&
+                _allowCloudEscalation &&
+                _cloudModel is not null)
+            {
+                var usedLocalModel = classification.UsedLocalModel;
+                classification = await InterpretWithModelAsync(
+                    kind,
+                    trimmed,
+                    classification,
+                    _cloudModel,
+                    isCloud: true,
+                    cancellationToken).ConfigureAwait(false);
+                classification = classification with { UsedLocalModel = usedLocalModel };
+            }
         }
 
         var id = Guid.NewGuid().ToString("N");
@@ -129,8 +156,8 @@ public sealed partial class DashboardIntakeService : IDashboardIntakeService
             classification.RejectedExpansion,
             classification.RequiresApproval,
             classification.UsedLocalModel,
-            UsedCloud: false,
-            IsBillable: false,
+            UsedCloud: classification.UsedCloudModel,
+            IsBillable: classification.UsedCloudModel,
             classification.ResolvedTarget,
             classification.ResolvedDescription,
             ResolvedRecordId: null,

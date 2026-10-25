@@ -16,6 +16,7 @@ public sealed partial class DashboardIntakeService
         string? RejectedExpansion = null,
         bool RequiresApproval = true,
         bool UsedLocalModel = false,
+        bool UsedCloudModel = false,
         string? ResolvedTarget = null,
         string? ResolvedDescription = null,
         string? Error = null,
@@ -321,6 +322,21 @@ public sealed partial class DashboardIntakeService
             };
         }
 
+        return await InterpretWithModelAsync(
+            kind, input, fallback, _localModel, isCloud: false, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<Classification> InterpretWithModelAsync(
+        IntakeKind kind,
+        string input,
+        Classification fallback,
+        IChatClient model,
+        bool isCloud,
+        CancellationToken cancellationToken)
+    {
+        var modelLabel = isCloud ? "Cloud" : "Local";
+
         using var timeout = new CancellationTokenSource(LocalModelTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
 
@@ -345,7 +361,7 @@ public sealed partial class DashboardIntakeService
 
         try
         {
-            var response = await _localModel.GetResponseAsync(
+            var response = await model.GetResponseAsync(
                 [new ChatMessage(ChatRole.User, prompt)],
                 new ChatOptions { MaxOutputTokens = 200 },
                 linked.Token).ConfigureAwait(false);
@@ -356,8 +372,9 @@ public sealed partial class DashboardIntakeService
             {
                 return fallback with
                 {
-                    UsedLocalModel = true,
-                    Error = "Local model did not return a structured proposal; marked for manual review.",
+                    UsedLocalModel = !isCloud,
+                    UsedCloudModel = isCloud,
+                    Error = $"{modelLabel} model did not return a structured proposal; marked for manual review.",
                 };
             }
 
@@ -375,17 +392,19 @@ public sealed partial class DashboardIntakeService
                 InferredScope: Read("scope"),
                 TrustBasis: Read("trustBasis"),
                 RequiresApproval: true,
-                UsedLocalModel: true,
+                UsedLocalModel: !isCloud,
+                UsedCloudModel: isCloud,
                 Error: Read("note"));
         }
         catch (Exception ex) when (
             ex is InvalidOperationException or OperationCanceledException or JsonException)
         {
-            _logger.LogWarning(ex, "Local model interpretation failed for {Kind} intake.", kind);
+            _logger.LogWarning(ex, "{Model} model interpretation failed for {Kind} intake.", modelLabel, kind);
             return fallback with
             {
-                UsedLocalModel = true,
-                Error = "Local model interpretation failed; marked for manual review.",
+                UsedLocalModel = !isCloud,
+                UsedCloudModel = isCloud,
+                Error = $"{modelLabel} model interpretation failed; marked for manual review.",
             };
         }
     }

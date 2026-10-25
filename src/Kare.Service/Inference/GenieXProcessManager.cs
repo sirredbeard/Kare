@@ -263,6 +263,6 @@ public sealed class GenieXProcessManager :
         }
     }
 
-    [DllImport("libc", SetLastError = true)]
+    [DllImport("libc", EntryPoint = "kill", SetLastError = true)]
     private static extern int Kill(int processId, int signal);
 }

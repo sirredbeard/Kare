@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using Kare.Service.Dashboard;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -216,6 +218,77 @@ public sealed class DashboardIntakeTests
             NullLogger<DashboardKnowledgeService>.Instance,
             statePath);
 
+    [Fact]
+    public async Task CloudEscalationRunsOnlyWhenEnabledAndStaysInReview()
+    {
+        var directory = CreateDirectory();
+        var statePath = Path.Combine(directory, "intake.json");
+
+        try
+        {
+            var knowledge = CreateKnowledge(Path.Combine(directory, "registry.json"));
+            var cloud = new JsonChatClient(
+                """{"canonicalName":"example-mcp","canonicalSource":"https://example.com/mcp","scope":"single endpoint","trustBasis":"test","note":"interpreted by cloud"}""");
+            var intake = new DashboardIntakeService(
+                knowledge,
+                NullLogger<DashboardIntakeService>.Instance,
+                statePath,
+                localModel: null,
+                cloudModel: cloud,
+                allowCloudEscalation: true);
+
+            var proposal = await intake.SubmitAsync(
+                IntakeKind.Mcp,
+                "just some ambiguous text with no scheme",
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, cloud.CallCount);
+            Assert.True(proposal.UsedCloud);
+            Assert.True(proposal.IsBillable);
+            Assert.True(proposal.RequiresApproval);
+            Assert.Equal(IntakeStatus.Review, proposal.Status);
+            Assert.Equal("example-mcp", proposal.CanonicalName);
+            Assert.Null(proposal.ResolvedRecordId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CloudEscalationNeverRunsWhenDisabled()
+    {
+        var directory = CreateDirectory();
+        var statePath = Path.Combine(directory, "intake.json");
+
+        try
+        {
+            var knowledge = CreateKnowledge(Path.Combine(directory, "registry.json"));
+            var cloud = new JsonChatClient("{}");
+            var intake = new DashboardIntakeService(
+                knowledge,
+                NullLogger<DashboardIntakeService>.Instance,
+                statePath,
+                localModel: null,
+                cloudModel: cloud,
+                allowCloudEscalation: false);
+
+            var proposal = await intake.SubmitAsync(
+                IntakeKind.Mcp,
+                "just some ambiguous text with no scheme",
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(0, cloud.CallCount);
+            Assert.False(proposal.UsedCloud);
+            Assert.False(proposal.IsBillable);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static DashboardIntakeService CreateIntake(
         string statePath,
         out DashboardKnowledgeService knowledge)
@@ -225,6 +298,34 @@ public sealed class DashboardIntakeTests
             knowledge,
             NullLogger<DashboardIntakeService>.Instance,
             statePath);
+    }
+
+    private sealed class JsonChatClient(string responseText) : IChatClient
+    {
+        public int CallCount { get; private set; }
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, responseText)));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield break;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 
     private sealed class StaticHttpClientFactory(HttpClient? client = null) : IHttpClientFactory

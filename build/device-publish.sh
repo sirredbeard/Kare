@@ -35,6 +35,11 @@ DOTNET="${KARE_DOTNET:-$REPO_ROOT/.dotnet/dotnet}"
 DEPLOY_ROOT="${KARE_DEPLOY_ROOT:-$HOME/kare/service}"
 PROJECT="$REPO_ROOT/src/Kare.Service/Kare.Service.csproj"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+# A release built from a dirty tree is not the commit it is named after.
+# Say so in the directory name instead of letting the name make the claim.
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
+    COMMIT="$COMMIT-dirty"
+fi
 OUTPUT="$REPO_ROOT/artifacts/kare-service-arm64-$MODE"
 RELEASE="$DEPLOY_ROOT/releases/$COMMIT-$MODE"
 CURRENT="$DEPLOY_ROOT/current"

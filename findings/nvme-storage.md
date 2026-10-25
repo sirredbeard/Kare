@@ -300,3 +300,18 @@ The useful layout is:
 Keep model directories checksummed and versioned. Keep logs and state bounded, private, and purpose-specific. Do not store raw prompts, source code, credentials, copied Copilot settings, or arbitrary home-directory content in `/var/lib/kare`.
 
 The drive is a storage and startup improvement, not an inference accelerator. GenieX still owns token latency. NVMe should reduce cold model load time and move the native runtime and model data away from the boot eMMC.
+
+## Link width recheck, 2026-10-25
+
+The Gen4 x1 note above is stale. The link now trains at full width:
+
+```text
+$ cat /sys/class/nvme/nvme0/device/current_link_speed
+16.0 GT/s PCIe
+$ cat /sys/class/nvme/nvme0/device/current_link_width
+4
+```
+
+`lspci -vv` for the NVMe endpoint (MAXIO MAP1602) agrees: `LnkSta: Speed 16GT/s, Width x4`.
+
+I do not know what changed. The board has been rebooted and the drive may have been reseated since the x1 reading. I am not going to guess. The current measured state is Gen4 x4, and the firmware and seating investigation in the older notes is closed unless the link drops back to x1.

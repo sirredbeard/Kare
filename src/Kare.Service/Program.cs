@@ -129,7 +129,16 @@ builder.Services.AddSingleton<IHostedService>(
 // The intake resolver depends only on the knowledge registry and the raw selected-backend
 // chat client, never on ContextEnrichingChatClient or the fully routed IChatClient, so there
 // is no DI cycle between dashboard context injection and dashboard intake.
-builder.Services.AddSingleton<IDashboardIntakeService, DashboardIntakeService>();
+// The cloud backend is a standalone IChatClient, not the routed client, so wiring
+// it into intake creates no DI cycle with ContextEnrichingChatClient. Escalation is
+// off by default and only the protected configuration can turn it on.
+builder.Services.AddSingleton<IDashboardIntakeService>(sp => new DashboardIntakeService(
+    sp.GetRequiredService<IDashboardKnowledgeService>(),
+    sp.GetRequiredService<ILogger<DashboardIntakeService>>(),
+    sp.GetRequiredService<SelectedBackendChatClient>(),
+    cloudModel: sp.GetRequiredService<ICloudInferenceBackend>(),
+    allowCloudEscalation: sp.GetRequiredService<IConfiguration>()
+        .GetValue<bool>("Kare:Intake:AllowCloudEscalation")));
 builder.Services.AddHttpClient(nameof(DashboardKnowledgeService), client =>
 {
     client.Timeout = TimeSpan.FromSeconds(15);
@@ -139,12 +148,16 @@ builder.Services.AddHttpClient(nameof(DashboardKnowledgeService), client =>
 {
     AllowAutoRedirect = false,
 });
-builder.Services.AddSingleton<IRouteRecorder>(sp =>
+builder.Services.AddSingleton<DashboardActivity>(sp =>
     new DashboardActivity(
         sp.GetRequiredService<MetricsRouteRecorder>(),
         sp.GetRequiredService<IDashboardMetricsCollector>(),
         sp.GetRequiredService<InferenceGate>(),
         sp.GetRequiredService<IOptions<InferenceLimits>>()));
+builder.Services.AddSingleton<IRouteRecorder>(
+    sp => sp.GetRequiredService<DashboardActivity>());
+builder.Services.AddSingleton<IHostedService>(sp =>
+    new WorkloadSampler(sp.GetRequiredService<DashboardActivity>()));
 builder.Services.AddSingleton<CopilotSdkBackend>();
 builder.Services.AddSingleton<ICloudInferenceBackend>(sp => sp.GetRequiredService<CopilotSdkBackend>());
 builder.Services.AddSingleton<ICloudModelCatalog>(sp => sp.GetRequiredService<CopilotSdkBackend>());

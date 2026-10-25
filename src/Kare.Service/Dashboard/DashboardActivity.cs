@@ -2,6 +2,7 @@ using Kare.Abstractions;
 using Kare.Core.Inference;
 using Kare.Core.Options;
 using Kare.Core.Routing;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace Kare.Service.Dashboard;
@@ -84,14 +85,56 @@ public sealed class DashboardActivity : IRouteRecorder
         {
             _totalRequests++;
             _totalTimeToFirstTokenMs += usage.TimeToFirstToken.TotalMilliseconds;
+        }
 
-            var activeRequests = Math.Max(0, _maximumConcurrency - _gate.AvailableSlots);
-            _collector.UpdateWorkload(new DashboardMetrics.WorkloadSnapshot(
-                QueueDepth: _gate.Waiting,
-                ActiveRequests: activeRequests,
-                BusyTimePercent: activeRequests * 100.0 / _maximumConcurrency,
-                TotalRequestsProcessed: _totalRequests,
-                AverageTimeToFirstTokenMs: _totalTimeToFirstTokenMs / _totalRequests));
+        RefreshWorkload();
+    }
+
+    /// <summary>
+    /// Publishes a workload snapshot from the live gate state. The sampler calls
+    /// this while requests are still running, so the dashboard does not sit at
+    /// zero for the whole duration of a long inference and then jump at the end.
+    /// </summary>
+    public void RefreshWorkload()
+    {
+        var activeRequests = Math.Max(0, _maximumConcurrency - _gate.AvailableSlots);
+        long totalRequests;
+        double averageTimeToFirstTokenMs;
+        lock (_sync)
+        {
+            totalRequests = _totalRequests;
+            averageTimeToFirstTokenMs = totalRequests == 0
+                ? 0
+                : _totalTimeToFirstTokenMs / totalRequests;
+        }
+
+        _collector.UpdateWorkload(new DashboardMetrics.WorkloadSnapshot(
+            QueueDepth: _gate.Waiting,
+            ActiveRequests: activeRequests,
+            BusyTimePercent: _maximumConcurrency == 0
+                ? 0
+                : activeRequests * 100.0 / _maximumConcurrency,
+            TotalRequestsProcessed: totalRequests,
+            AverageTimeToFirstTokenMs: averageTimeToFirstTokenMs));
+    }
+}
+
+/// <summary>
+/// Samples the inference gate on a fixed interval and republishes the workload
+/// snapshot, so active and queued work is visible while it is running instead
+/// of only after a route record lands.
+/// </summary>
+public sealed class WorkloadSampler(DashboardActivity activity) : BackgroundService
+{
+    private static readonly TimeSpan Interval = TimeSpan.FromSeconds(1);
+
+    /// <inheritdoc />
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(Interval);
+        while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+        {
+            activity.RefreshWorkload();
         }
     }
 }

@@ -772,13 +772,12 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
                 foreach (Match match in LinkRegex().Matches(body))
                 {
                     if (!Uri.TryCreate(uri, match.Groups["url"].Value, out var linked) ||
-                        !SameOrigin(seed, linked) ||
-                        !MatchesPattern(source.Pattern, linked.AbsoluteUri))
+                        !IsAllowedCrawlTarget(seed, source.Pattern, linked))
                     {
                         continue;
                     }
 
-                    pending.Enqueue(linked);
+                    pending.Enqueue(StripFragment(linked));
                 }
             }
 
@@ -1535,11 +1534,84 @@ public sealed partial class DashboardKnowledgeService : BackgroundService, IDash
         }
     }
 
-    private static bool MatchesPattern(string pattern, string value)
+    internal static bool MatchesPattern(string pattern, string value)
     {
         var expression = "^" + Regex.Escape(pattern).Replace("\\*", ".*", StringComparison.Ordinal) + "$";
         return Regex.IsMatch(value, expression, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
+
+    /// <summary>
+    /// Path segments a crawl never follows into, even when the registered
+    /// pattern matches. These are account, session, and repository plumbing
+    /// paths. A documentation crawl has no business in any of them.
+    /// </summary>
+    private static readonly string[] DeniedPathSegments =
+    [
+        ".git", "account", "admin", "checkout", "login", "logout", "wp-admin",
+    ];
+
+    /// <summary>
+    /// Decides whether one linked page is inside the registered crawl scope.
+    /// The wildcard match alone is not enough: the link also has to stay under
+    /// the pattern path prefix at a segment boundary and stay out of the
+    /// denied segments, so a pattern like 'https://host/docs*' cannot wander
+    /// into a login page or an account path that happens to match.
+    /// </summary>
+    internal static bool IsAllowedCrawlTarget(Uri seed, string pattern, Uri linked)
+    {
+        if (!SameOrigin(seed, linked) || !MatchesPattern(pattern, linked.AbsoluteUri))
+        {
+            return false;
+        }
+
+        var segments = linked.AbsolutePath.Split(
+            '/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Any(static segment => DeniedPathSegments.Contains(
+                Uri.UnescapeDataString(segment), StringComparer.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return IsUnderPatternPrefix(pattern, linked);
+    }
+
+    private static bool IsUnderPatternPrefix(string pattern, Uri linked)
+    {
+        var wildcard = pattern.IndexOf('*', StringComparison.Ordinal);
+        if (wildcard < 0)
+        {
+            return true;
+        }
+
+        if (!Uri.TryCreate(pattern[..wildcard], UriKind.Absolute, out var prefixUri))
+        {
+            return false;
+        }
+
+        var prefixPath = prefixUri.AbsolutePath;
+        var linkedPath = linked.AbsolutePath;
+        if (!linkedPath.StartsWith(prefixPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (linkedPath.Length == prefixPath.Length || prefixPath.EndsWith('/'))
+        {
+            return true;
+        }
+
+        // The wildcard sits inside a path segment. It may extend that one
+        // segment, but the match cannot cross into a deeper path unless the
+        // pattern itself continues past the wildcard.
+        var remainder = linkedPath[prefixPath.Length..];
+        var nextSlash = remainder.IndexOf('/');
+        return nextSlash < 0 || pattern.Length > wildcard + 1;
+    }
+
+    private static Uri StripFragment(Uri uri) =>
+        uri.Fragment.Length == 0
+            ? uri
+            : new UriBuilder(uri) { Fragment = string.Empty }.Uri;
 
     private static bool SameOrigin(Uri left, Uri right) =>
         string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase) &&

@@ -302,6 +302,8 @@ The protected Azure account currently exposes 163 Foundry model definitions and 
 
 The protected catalog includes explicit routes for the deployed `gpt-5.6-sol` and `claude-sonnet-4-6` models. Kare exposes one public `kare` model and orders eligible catalog entries by configured priority. New routes must pass streaming, cancellation, usage, tool, and failure tests before they receive cascade priority.
 
+Recheck, 2026-10-25: the inventory above is one generation old. HydraFusion's pool is now Claude Opus 5.5, GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna, the Copilot GPT-5.6 Terra route retires on 2026-11-16, and the catalog swaps needed are listed in `findings/frontier-model-refresh.md`. The catalog itself stays in protected configuration and is not committed.
+
 ## Model and runtime plan
 
 ### First local candidates

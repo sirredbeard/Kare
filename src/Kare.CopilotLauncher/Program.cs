@@ -146,6 +146,14 @@ internal sealed class CopilotKareApp
 
             WriteLastDeviceHost(configDirectory, lastDeviceHostFile, deviceHost);
 
+            if (input.VsCode)
+            {
+                PrintVsCodeSetup(input, configValues, healthBaseUrl, routingMode);
+                await WaitForStopSignalAsync().ConfigureAwait(false);
+                Console.WriteLine("Stopping the Kare tunnel for VS Code.");
+                return 0;
+            }
+
             Console.WriteLine(
                 $"Kare is ready at {healthBaseUrl}. Routing mode: {routingMode.Mode} ({routingMode.Reason}). Starting GitHub Copilot with the BYOK provider.");
 
@@ -589,6 +597,95 @@ internal sealed class CopilotKareApp
         }
     }
 
+    private static string EscapeJson(string value) =>
+        value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\t", "\\t", StringComparison.Ordinal);
+
+    private static void PrintVsCodeSetup(
+        LauncherInput input,
+        IReadOnlyDictionary<string, string> configValues,
+        string healthBaseUrl,
+        RoutingModeSelection routingMode)
+    {
+        var modelId = GetSetting(configValues, "KARE_MODEL_ID", "kare");
+        var wireModel = GetSetting(configValues, "KARE_WIRE_MODEL", "kare");
+        var maxInputTokens = int.TryParse(
+            GetSetting(configValues, "KARE_MAX_PROMPT_TOKENS", input.MinimalContext ? "7936" : "31744"),
+            out var parsedInput)
+            ? parsedInput
+            : 31744;
+        var maxOutputTokens = int.TryParse(
+            GetSetting(configValues, "KARE_MAX_OUTPUT_TOKENS", input.MinimalContext ? "256" : "1024"),
+            out var parsedOutput)
+            ? parsedOutput
+            : 1024;
+
+        // The launcher publishes trimmed, so this JSON is built by hand. The
+        // values are short config strings and EscapeJson covers the cases
+        // they can actually contain.
+        var profileJson =
+            """
+            [
+              {
+                "name": "Kare",
+                "vendor": "customendpoint",
+                "apiKey": "${input:kareApiKey}",
+                "apiType": "chat-completions",
+                "models": [
+                  {
+                    "id": "%WIRE%",
+                    "name": "%MODEL%",
+                    "url": "%URL%",
+                    "toolCalling": true,
+                    "vision": true,
+                    "maxInputTokens": %INPUT%,
+                    "maxOutputTokens": %OUTPUT%
+                  }
+                ]
+              }
+            ]
+            """
+            .Replace("%WIRE%", EscapeJson(wireModel), StringComparison.Ordinal)
+            .Replace("%MODEL%", EscapeJson(modelId), StringComparison.Ordinal)
+            .Replace("%URL%", EscapeJson($"{healthBaseUrl}/v1/chat/completions"), StringComparison.Ordinal)
+            .Replace("%INPUT%", maxInputTokens.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("%OUTPUT%", maxOutputTokens.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
+        Console.WriteLine($"Kare is ready at {healthBaseUrl}. Routing mode: {routingMode.Mode} ({routingMode.Reason}).");
+        Console.WriteLine("VS Code mode: the SSH tunnel stays open while this command runs.");
+        Console.WriteLine("Add this entry to chatLanguageModels.json (Chat: Manage Language Models, Add Models, Custom Endpoint):");
+        Console.WriteLine();
+        Console.WriteLine(profileJson);
+        Console.WriteLine();
+        Console.WriteLine("The apiKey value above is a VS Code input placeholder. VS Code prompts for the");
+        Console.WriteLine("key and keeps it in secret storage. The launcher does not write the key anywhere.");
+        Console.WriteLine("Select Kare in the Copilot Chat model picker, then stop this command with Ctrl+C when done.");
+    }
+
+    private static async Task WaitForStopSignalAsync()
+    {
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Console.CancelKeyPress += OnCancel;
+        try
+        {
+            await stopped.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= OnCancel;
+        }
+
+        void OnCancel(object? sender, ConsoleCancelEventArgs eventArgs)
+        {
+            eventArgs.Cancel = true;
+            stopped.TrySetResult();
+        }
+    }
+
     private static void PrintUsage()
     {
         Console.WriteLine("Usage: copilot-kare [device-ip-or-host] [copilot args...]");
@@ -599,6 +696,8 @@ internal sealed class CopilotKareApp
         Console.WriteLine("  --kare-log-dir PATH     Use PATH for Copilot CLI logs. Implies --kare-verbose.");
         Console.WriteLine("  --kare-minimal-context  Use the offline 8192-token diagnostic profile with only bash.");
         Console.WriteLine("  --kare-work             Force Work mode for this session.");
+        Console.WriteLine("  --vscode                Open the tunnel for VS Code, print the Custom Endpoint");
+        Console.WriteLine("                          entry, and stay in the foreground until Ctrl+C.");
         Console.WriteLine();
         Console.WriteLine("The default profile advertises a 32768-token routed context with Copilot tools,");
         Console.WriteLine("builtin MCP servers, and repository instructions enabled.");
@@ -615,7 +714,8 @@ internal sealed record LauncherInput(
     string? LogDirectory,
     bool MinimalContext,
     bool WorkMode,
-    string? Error);
+    string? Error,
+    bool VsCode);
 
 internal static class LauncherInputParser
 {
@@ -627,6 +727,7 @@ internal static class LauncherInputParser
         var verbose = false;
         var minimalContext = false;
         var workMode = false;
+        var vsCode = false;
         var parseLauncherOptions = true;
 
         for (var index = 0; index < args.Length; index++)
@@ -640,7 +741,7 @@ internal static class LauncherInputParser
 
             if (parseLauncherOptions && IsHelpArgument(argument))
             {
-                return new LauncherInput(null, [], true, false, null, false, false, null);
+                return new LauncherInput(null, [], true, false, null, false, false, null, false);
             }
 
             if (parseLauncherOptions && argument is "--kare-verbose")
@@ -658,6 +759,12 @@ internal static class LauncherInputParser
             if (parseLauncherOptions && argument is "--kare-work")
             {
                 workMode = true;
+                continue;
+            }
+
+            if (parseLauncherOptions && argument is "--vscode" or "--kare-vscode")
+            {
+                vsCode = true;
                 continue;
             }
 
@@ -707,10 +814,11 @@ internal static class LauncherInputParser
             logDirectory,
             minimalContext,
             workMode,
-            null);
+            null,
+            vsCode);
 
         static LauncherInput Error(string message) =>
-            new(null, [], false, false, null, false, false, message);
+            new(null, [], false, false, null, false, false, message, false);
     }
 
     private static bool IsHelpArgument(string argument)

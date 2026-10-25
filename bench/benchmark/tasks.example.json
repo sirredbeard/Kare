@@ -1,0 +1,9 @@
+{
+  "comment": "Starter set only. Issue #8 calls for 24 frozen tasks, four per category across six categories. Grow this file to that set, then freeze it before collecting scored results. Do not edit tasks mid-run.",
+  "tasks": [
+    {"id": "lookup-1", "category": "repository-lookup", "prompt": "Which file owns the GenieX process lifecycle in this repository? Answer with the file path.", "expect_any": ["GenieXProcessManager.cs"]},
+    {"id": "lookup-2", "category": "repository-lookup", "prompt": "What loopback port does the Kare service listen on by default? Answer with the port number.", "expect_any": ["5285"]},
+    {"id": "explain-1", "category": "code-explanation", "prompt": "Explain in two sentences why the intake cloud escalation is off by default.", "expect_any": ["billable", "approval"]},
+    {"id": "small-fix-1", "category": "small-fix", "prompt": "A C# P/Invoke declares [DllImport(\"libc\")] private static extern int Kill(int pid, int sig); and throws EntryPointNotFoundException at runtime. What is wrong? Answer in one sentence.", "expect_any": ["kill", "entry point"]}
+  ]
+}

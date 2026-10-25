@@ -1,49 +1,45 @@
 # Kare progress
 
-Updated 2026-10-08 on the VENTUNO Q.
+Updated 2026-10-25 on the VENTUNO Q.
 
-## Current branch
+## Current state
 
-- Branch: `pr-14-rewrite`
-- Pull request: #14, `Add estimated model costs and local SLM savings`
-- Base: `copilot/close-issues-7-10-11-13`
-- The branch adds a provider-boundary routing mode on top of the PR work.
+- Branch: `main` at `ccc066b`. The changes below sit in the working tree. Nothing was committed in this pass, by instruction. The tree waits on review.
+- Pull requests #14 and #16 are merged. The old note that called `pr-14-rewrite` the current branch was stale and is gone.
+- The deployed release is `ccc066b-dirty-jit` under `~/kare/service/current`. The `-dirty` suffix is new: `build/device-publish.sh` now names a release after the dirty tree that built it, not after the commit alone.
+- `kare.service` is enabled, and linger is on for the `arduino` user. The user manager was not running at all after the last reboot, which is why Kare was down. That hole is closed.
 
-## Verified
+## Fixed in this pass
 
-- The board identifies as VENTUNO Q (`arduino,monza`).
-- The local .NET 11 RC SDK is available.
-- The focused test project builds and runs on the device: 157 passed.
-- Routing modes default to `Personal`; `Work` requires explicit selection.
-- Cloud routes can be limited to `Personal`, `Work`, or `Both`.
-- The launcher now resolves `explicit_work`, protected repository mappings,
-  configured organizations, and the built-in `neverenginsupport` and `dotnet`
-  organization matches.
-- Work mode is sent to Kare with a fixed provider header and personal routes are
-  filtered before dispatch.
-- The pricing test helper enables cloud configuration so configured average prices are available to local savings estimates.
+- The GenieX stop path P/Invoked libc as `Kill`. The export is `kill`. Stop threw `EntryPointNotFoundException` on every shutdown. The entry point is now named in the attribute, a regression test pins it, and a live restart on 2026-10-25 stopped and started with no exception in the journal.
+- Dashboard workload counters only moved when a route record landed, so a running inference read as zero. `DashboardActivity.RefreshWorkload()` now reads the live gate, a sampler republishes every second, and a streamed request on 2026-10-25 held `activeRequests` at 1 across 18 dashboard polls, then dropped back to 0.
+- The source crawler followed any link the wildcard pattern matched. It now also checks a segment-aware path prefix and a denied segment list (`.git`, `account`, `admin`, `checkout`, `login`, `logout`, `wp-admin`), and it strips fragments before a page enters the queue.
+- Intake cloud escalation exists. It is off by default (`Kare:Intake:AllowCloudEscalation`), runs only when the local pass returns no usable interpretation, uses the standalone cloud backend (no DI cycle with `ContextEnrichingChatClient`), and marks the proposal `UsedCloud` and billable. A cloud-read proposal always stays in Review. It is never auto-activated.
+- `copilot-kare --vscode` is built (issue #9, first pass). It opens the tunnel, waits for `/health`, prints the VS Code Custom Endpoint entry for `chatLanguageModels.json` with the `${input:kareApiKey}` secret placeholder, and stays in the foreground until Ctrl+C. The key is never written to a file by the launcher. The rebuilt ARM64 artifact is in `artifacts/copilot-kare` and `--help` shows the new mode.
+- `Kare.Inference.GenieX` is in `Kare.slnx`. It was missing. The Service referenced it and the tests built it, but the solution did not list it.
+- `build/device-geniex-guard.sh` assumed the external `kare-geniex.service` runs the sidecar. Kare owns the sidecar now, so the guard failed before any deploy could start. The guard now handles both owners and skips the inference check with a notice when no endpoint is up yet. The post-deploy run is the one that has to pass, and it did: compute `npu`, bounded inference OK.
+- Issue #3 has a finding, not a fix: `findings/model-catalog-warning.md`. The warning is a CLI-side model completion check with no documented off switch. Kare cannot fix it from the server side. Filtering CLI output in the launcher was considered and rejected.
+- Issue #8 has a harness: `bench/benchmark/benchmark.py`, a starter task set, and a README. Quality, latency, and cost stay as three separate numbers. Dry run passes. A scored run still needs the frozen 24-task set.
+- Issue #6 has it's local half: `build/kare-backup.sh` writes a restore point with a schema 1 manifest (sequence, commit with `-dirty` suffix when the tree is dirty, SHA-256 and byte count per object), verifies it, and prunes at 14 days. The first real point is on the device at `/var/lib/kare/backups/restore-points/20261025T074331Z-000001-ccc066b-dirty`, 5 objects, verified. Field inventory and the Azure steps left are in `findings/backup-restore-points.md`.
+- The PCIe note in `findings/nvme-storage.md` was stale. The NVMe link now trains at Gen4 x4 (16.0 GT/s, width 4, in both sysfs and `lspci`). A dated recheck is appended to that file.
 
-## Validation notes
+## Branch cleanup
 
-- `dotnet test tests/Kare.Tests/Kare.Tests.csproj --no-restore --nologo`: 157 passed.
-- `dotnet build src/Kare.Service/Kare.Service.csproj --no-restore --nologo`: succeeded with 0 warnings and 0 errors.
-- The test project build completed all referenced Kare projects successfully.
-- Routing mode and reason metadata are included in route records and cache
-  fingerprints. Invalid mode or reason combinations are rejected.
+- Deleted local: `research/local-first-routing-epic`, `chore/readme-launcher-usability`.
+- Deleted on origin: `research/local-first-routing-epic`, `fix/ssh-auth-before-copilot`, `copilot/close-issues-7-10-11-13`. All three belong to merged pull requests.
+- Kept: both `backup/` branches, `docs/nvme-storage-plan`, `fix/ssh-auth-before-copilot` (local), and `pr-14-rewrite`. `git cherry` reports commits on the last three that are not patch-equal to anything in `main`. I did not delete the only local copy of work I could not prove was in `main`. That call is yours.
+
+## Validation
+
+- `dotnet test tests/Kare.Tests/Kare.Tests.csproj`: 176 passed, 0 failed. The count was 158 at the start of this pass. The 18 new tests cover the `kill` entry point, live workload refresh, the crawler path policy, intake cloud escalation on and off, and `--vscode` parsing.
+- `./build/device-publish.sh --jit --test` ran the tests again, published, restarted the service, passed `/health`, and passed the GenieX guard.
+- Live checks after the restart: `/v1/models` returns the `kare` model, the dashboard snapshot answers with the API key, and the GenieX sidecar (a Kare-owned child process) lists `unsloth/Qwen3.5-0.8B-GGUF:Q4_0` on `127.0.0.1:18181`.
 
 ## Remaining
 
-- Set explicit Personal and Work route permissions in protected configuration
-  after the approved Work provider is confirmed. Do not commit that configuration.
-- Work-provider mapping remains an explicit route boundary, not repository ownership or authentication.
-
-## Issue #15
-
-- Reproduced the plain-terminal failure with the published launcher artifact.
-- The launcher now waits for SSH authentication and tunnel establishment before
-  checking `/health` or starting Copilot.
-- SSH uses a private control socket and backgrounds only after authentication.
-- Added a regression test for the control-master arguments.
-- Current validation: 158 tests passed. The service build passed with one
-  transient file-lock warning caused by parallel test and build execution; rerun
-  serially before the fix PR.
+- Set explicit Personal and Work route permissions in protected configuration after the approved Work provider is confirmed. Do not commit that configuration. (Carried over from the 2026-10-08 note. Still open.)
+- Issue #6, Azure half: provision the PostgreSQL Flexible Server with 14-day point-in-time restore, then build the uploader, restore, and clone paths. Local points die with the board until this lands.
+- Issue #8: freeze the 24-task set, then run the scored comparison against Copilot CLI `auto` from the client machine.
+- Issue #3: re-check the BYOK documentation when the Copilot CLI version changes.
+- The three kept branches above wait on a delete call.
+- Frontier refresh: the protected catalog still targets the GPT-5.6 and Claude 5 generation. HydraFusion moved to Opus 5.5, GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna on 2026-10-14, and the Copilot Terra route dies on 2026-11-16. The swap list is in `findings/frontier-model-refresh.md`. It starts with new Foundry deployments, which is portal work, not code.
