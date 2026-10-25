@@ -49,11 +49,14 @@ public sealed record CloudModelDescriptor(
     RouteMode AllowedModes = RouteMode.Both)
 {
     /// <summary>Route recorded when this model serves a request.</summary>
-    public KareRoute Route => Provider == CloudModelProvider.MicrosoftFoundry
-        ? KareRoute.Foundry
-        : Tier == CloudModelTier.Fast
+    public KareRoute Route => Provider switch
+    {
+        CloudModelProvider.MicrosoftFoundry => KareRoute.Foundry,
+        CloudModelProvider.Anthropic => KareRoute.Anthropic,
+        _ => Tier == CloudModelTier.Fast
             ? KareRoute.CopilotLight
-            : KareRoute.CopilotHeavy;
+            : KareRoute.CopilotHeavy,
+    };
 }
 
 /// <summary>Provider boundary selected for a request.</summary>
@@ -118,4 +121,7 @@ public enum CloudModelProvider
 
     /// <summary>Microsoft Foundry through a configured OpenAI-compatible deployment.</summary>
     MicrosoftFoundry = 1,
+
+    /// <summary>Anthropic directly, through the Anthropic Messages API.</summary>
+    Anthropic = 2,
 }

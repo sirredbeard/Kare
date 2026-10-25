@@ -172,7 +172,7 @@ public sealed class CopilotSdkOptionsValidatorTests
     }
 
     [Fact]
-    public void CloudModelRejectsEmptyRoutingModes()
+    public void CloudModelAcceptsEmptyRoutingModesAsBothModes()
     {
         var options = new CopilotSdkOptions { Enabled = true };
         options.Models.Add(new CloudModelRouteOptions
@@ -184,6 +184,90 @@ public sealed class CopilotSdkOptionsValidatorTests
 
         var result = _validator.Validate(null, options);
 
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void AnthropicRouteAcceptsClaudeOAuthConfiguration()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(AnthropicRoute());
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void AnthropicRouteRequiresClaudeOAuthAuthentication()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        var route = AnthropicRoute();
+        route.Authentication = CloudAuthentication.EnvironmentApiKey;
+        route.ApiKeyEnvironmentVariable = "KARE_ANTHROPIC_API_KEY";
+        options.Models.Add(route);
+
+        var result = _validator.Validate(null, options);
+
         Assert.True(result.Failed);
     }
+
+    [Fact]
+    public void AnthropicRouteRequiresRootedCredentialsPath()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        var route = AnthropicRoute();
+        route.OAuthCredentialsPath = "relative/credentials.json";
+        options.Models.Add(route);
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void AnthropicRouteRequiresHttpsEndpointAndAnthropicWire()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        var route = AnthropicRoute();
+        route.WireApi = "responses";
+        options.Models.Add(route);
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void FoundryRouteRejectsClaudeOAuthAuthentication()
+    {
+        var options = new CopilotSdkOptions { Enabled = true };
+        options.Models.Add(new CloudModelRouteOptions
+        {
+            Id = "foundry-complex",
+            Provider = Kare.Abstractions.CloudModelProvider.MicrosoftFoundry,
+            ModelId = "claude-opus-5-5",
+            WireModel = "claude-opus-5-5",
+            BaseUrl = "https://foundry.example",
+            Authentication = CloudAuthentication.ClaudeOAuth,
+            OAuthCredentialsPath = "/protected/credentials.json",
+            WireApi = "anthropic",
+        });
+
+        var result = _validator.Validate(null, options);
+
+        Assert.True(result.Failed);
+    }
+
+    private static CloudModelRouteOptions AnthropicRoute() => new()
+    {
+        Id = "anthropic-complex",
+        Provider = Kare.Abstractions.CloudModelProvider.Anthropic,
+        ModelId = "claude-opus-5-5",
+        WireModel = "claude-opus-5-5",
+        BaseUrl = "https://api.anthropic.com",
+        Authentication = CloudAuthentication.ClaudeOAuth,
+        OAuthCredentialsPath = "/protected/credentials.json",
+        WireApi = "anthropic",
+    };
 }

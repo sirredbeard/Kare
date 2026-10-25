@@ -23,4 +23,7 @@ public enum KareRoute
 
     /// <summary>A Microsoft Foundry deployment answered the request.</summary>
     Foundry = 5,
+
+    /// <summary>A model served directly by Anthropic answered the request.</summary>
+    Anthropic = 6,
 }

@@ -47,11 +47,10 @@ public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOpti
         var routeIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var model in options.Models)
         {
-            if (model.AllowedModes.Count == 0 ||
-                model.AllowedModes.Any(mode => mode is not (RouteMode.Personal or RouteMode.Work or RouteMode.Both)))
+            if (model.AllowedModes.Any(mode => mode is not (RouteMode.Personal or RouteMode.Work or RouteMode.Both)))
             {
                 return ValidateOptionsResult.Fail(
-                    $"Cloud model {model.Id} must allow Personal, Work, or Both routing modes.");
+                    $"Cloud model {model.Id} may only allow Personal, Work, or Both routing modes.");
             }
 
             if (string.IsNullOrWhiteSpace(model.Id) || !routeIds.Add(model.Id))
@@ -95,12 +94,49 @@ public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOpti
                     $"Cloud model {model.Id} requires a public HTTPS PricingSource without credentials, query, or fragment and a PricingAsOf date when prices are configured.");
             }
 
-            if (model.Provider != Kare.Abstractions.CloudModelProvider.MicrosoftFoundry)
+            if (model.Provider == Kare.Abstractions.CloudModelProvider.GitHubCopilot)
             {
                 if (model.Authentication != CloudAuthentication.Copilot)
                 {
                     return ValidateOptionsResult.Fail(
                         $"GitHub Copilot model {model.Id} must use Copilot authentication.");
+                }
+
+                continue;
+            }
+
+            if (model.Provider == Kare.Abstractions.CloudModelProvider.Anthropic)
+            {
+                if (!Uri.TryCreate(model.BaseUrl, UriKind.Absolute, out var anthropicEndpoint) ||
+                    anthropicEndpoint.Scheme != Uri.UriSchemeHttps)
+                {
+                    return ValidateOptionsResult.Fail(
+                        $"Anthropic model {model.Id} requires an absolute HTTPS BaseUrl.");
+                }
+
+                if (string.IsNullOrWhiteSpace(model.WireModel))
+                {
+                    return ValidateOptionsResult.Fail(
+                        $"Anthropic model {model.Id} requires WireModel.");
+                }
+
+                if (model.WireApi is not "anthropic")
+                {
+                    return ValidateOptionsResult.Fail(
+                        $"Anthropic model {model.Id} WireApi must be 'anthropic'.");
+                }
+
+                if (model.Authentication != CloudAuthentication.ClaudeOAuth)
+                {
+                    return ValidateOptionsResult.Fail(
+                        $"Anthropic model {model.Id} requires ClaudeOAuth authentication.");
+                }
+
+                if (string.IsNullOrWhiteSpace(model.OAuthCredentialsPath) ||
+                    !Path.IsPathRooted(model.OAuthCredentialsPath))
+                {
+                    return ValidateOptionsResult.Fail(
+                        $"Anthropic model {model.Id} requires an absolute OAuthCredentialsPath.");
                 }
 
                 continue;
@@ -140,7 +176,7 @@ public sealed class CopilotSdkOptionsValidator : IValidateOptions<CopilotSdkOpti
                     $"Foundry model {model.Id} requires an absolute HTTPS TokenScope for Azure CLI authentication.");
             }
 
-            if (model.Authentication == CloudAuthentication.Copilot)
+            if (model.Authentication is CloudAuthentication.Copilot or CloudAuthentication.ClaudeOAuth)
             {
                 return ValidateOptionsResult.Fail(
                     $"Foundry model {model.Id} requires EnvironmentApiKey or AzureCli authentication.");

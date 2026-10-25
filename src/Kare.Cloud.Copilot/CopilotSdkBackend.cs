@@ -21,6 +21,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
     private readonly IReadOnlyList<CloudModelDescriptor> _models;
     private readonly ILogger<CopilotSdkBackend> _logger;
     private readonly AzureCliBearerTokenProvider _azureTokens;
+    private readonly Dictionary<string, ClaudeOAuthTokenProvider> _claudeTokens =
+        new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _startGate = new(1, 1);
     private readonly SemaphoreSlim _modelCatalogGate = new(1, 1);
     private CopilotClient? _client;
@@ -48,9 +50,11 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 model.Priority,
                 model.SupportsTools,
                 model.SupportsImages,
-                model.AllowedModes.Aggregate(
-                    (RouteMode)0,
-                    static (modes, mode) => modes | mode)))
+                model.AllowedModes.Count == 0
+                    ? RouteMode.Both
+                    : model.AllowedModes.Aggregate(
+                        (RouteMode)0,
+                        static (modes, mode) => modes | mode)))
             .ToArray();
     }
 
@@ -87,10 +91,16 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
              !string.IsNullOrWhiteSpace(
                  Environment.GetEnvironmentVariable(_options.FoundryApiKeyEnvironmentVariable)));
 
-        if (!hasGitHubCredential && !hasFoundryCredential)
+        var hasAnthropicCredential = _options.Models.Any(model =>
+            model.Provider == CloudModelProvider.Anthropic &&
+            model.Authentication == CloudAuthentication.ClaudeOAuth &&
+            !string.IsNullOrWhiteSpace(model.OAuthCredentialsPath) &&
+            File.Exists(model.OAuthCredentialsPath));
+
+        if (!hasGitHubCredential && !hasFoundryCredential && !hasAnthropicCredential)
         {
             return BackendProbeResult.Unavailable(
-                "No configured GitHub Copilot or Microsoft Foundry credential is available.");
+                "No configured GitHub Copilot, Microsoft Foundry, or Anthropic credential is available.");
         }
 
         try
@@ -445,23 +455,40 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 AutoTier = new AutoTier(_options.AutoTier),
             };
         }
-        else if (route.Provider == CloudModelProvider.MicrosoftFoundry)
+        else if (route.Provider is CloudModelProvider.MicrosoftFoundry or CloudModelProvider.Anthropic)
         {
-            var isAnthropic = string.Equals(route.WireApi, "anthropic", StringComparison.Ordinal);
+            var isAnthropicWire = string.Equals(route.WireApi, "anthropic", StringComparison.Ordinal);
+            var isDirectAnthropic = route.Provider == CloudModelProvider.Anthropic;
             config.Provider = new GitHub.Copilot.ProviderConfig
             {
-                Type = isAnthropic ? "anthropic" : "openai",
-                BaseUrl = BuildProviderBaseUrl(route.BaseUrl!, isAnthropic),
-                WireApi = isAnthropic ? null : "responses",
+                Type = isAnthropicWire ? "anthropic" : "openai",
+                BaseUrl = isDirectAnthropic
+                    ? route.BaseUrl!.TrimEnd('/')
+                    : BuildProviderBaseUrl(route.BaseUrl!, isAnthropicWire),
+                WireApi = isAnthropicWire ? null : "responses",
                 ModelId = route.ModelId,
                 WireModel = route.WireModel,
                 MaxPromptTokens = route.MaxPromptTokens,
                 MaxOutputTokens = route.MaxOutputTokens,
             };
 
+            if (isDirectAnthropic)
+            {
+                // Anthropic accepts a Claude Code OAuth token only with this beta flag.
+                config.Provider.Headers = new Dictionary<string, string>
+                {
+                    ["anthropic-beta"] = "oauth-2025-04-20",
+                };
+            }
+
             if (route.Authentication == CloudAuthentication.AzureCli)
             {
                 config.Provider.BearerTokenProvider = _ => _azureTokens.GetTokenAsync(route.TokenScope);
+            }
+            else if (route.Authentication == CloudAuthentication.ClaudeOAuth)
+            {
+                var tokenProvider = GetClaudeTokenProvider(route.OAuthCredentialsPath!);
+                config.Provider.BearerTokenProvider = _ => tokenProvider.GetTokenAsync();
             }
             else
             {
@@ -471,6 +498,20 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         }
 
         return config;
+    }
+
+    private ClaudeOAuthTokenProvider GetClaudeTokenProvider(string credentialsPath)
+    {
+        lock (_claudeTokens)
+        {
+            if (!_claudeTokens.TryGetValue(credentialsPath, out var provider))
+            {
+                provider = new ClaudeOAuthTokenProvider(credentialsPath);
+                _claudeTokens[credentialsPath] = provider;
+            }
+
+            return provider;
+        }
     }
 
     private static string BuildProviderBaseUrl(string baseUrl, bool isAnthropic)
@@ -590,7 +631,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 configured.WireApi,
                 configured.MaxPromptTokens,
                 configured.MaxOutputTokens,
-                configured.SupportsImages);
+                configured.SupportsImages,
+                configured.OAuthCredentialsPath);
         }
 
         var modelId = string.IsNullOrWhiteSpace(routeId) ? _options.ModelId : routeId;
@@ -609,7 +651,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
                 _options.FoundryWireApi,
                 null,
                 null,
-                SupportsImages: false);
+                SupportsImages: false,
+                OAuthCredentialsPath: null);
         }
 
         return new ResolvedCloudRoute(
@@ -624,7 +667,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
             null,
             null,
             null,
-            SupportsImages: false);
+            SupportsImages: false,
+            OAuthCredentialsPath: null);
     }
 
     private async ValueTask EnsureRouteAvailableAsync(
@@ -683,6 +727,18 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
             return;
         }
 
+        if (route.Authentication == CloudAuthentication.ClaudeOAuth)
+        {
+            if (string.IsNullOrWhiteSpace(route.OAuthCredentialsPath) ||
+                !File.Exists(route.OAuthCredentialsPath))
+            {
+                throw new CloudInferenceException(
+                    $"Claude OAuth credentials file is not available for model {route.ModelId}. Sign in with Claude Code on this device first.");
+            }
+
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(
             Environment.GetEnvironmentVariable(route.ApiKeyEnvironmentVariable!)))
         {
@@ -703,7 +759,8 @@ public sealed class CopilotSdkBackend : ICloudInferenceBackend, ICloudModelCatal
         string? WireApi,
         int? MaxPromptTokens,
         int? MaxOutputTokens,
-        bool SupportsImages);
+        bool SupportsImages,
+        string? OAuthCredentialsPath);
 
     private static ChatResponse CreateToolResponse(
         ExternalToolRequestedEvent tool,

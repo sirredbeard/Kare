@@ -182,6 +182,23 @@ public static class DashboardMetrics
         string InputSchema);
 
     /// <summary>
+    /// Process-lifetime savings view: how many successful answers the local SLM
+    /// served, what the cloud routes cost, and what the local answers avoided.
+    /// Percents and costs are null when there is no measured data behind them,
+    /// never zero-filled guesses.
+    /// </summary>
+    public record SavingsSummary(
+        long SuccessfulRequests,
+        long SlmRequests,
+        long CacheRequests,
+        long CloudRequests,
+        double? SlmSharePercent,
+        double? OnDeviceSharePercent,
+        decimal? EstimatedCloudCostUsd,
+        long PricedCloudRequests,
+        decimal? EstimatedAvoidedCostUsd);
+
+    /// <summary>
     /// Complete point-in-time dashboard payload.
     /// </summary>
     public record Snapshot(
@@ -194,5 +211,48 @@ public static class DashboardMetrics
         WorkloadSnapshot? Workload,
         IReadOnlyList<RoutingDecisionUrl> RoutingDecisionUrls,
         IReadOnlyList<SkillInfo> Skills,
-        IReadOnlyList<McpServerInfo> McpServers);
+        IReadOnlyList<McpServerInfo> McpServers,
+        SavingsSummary? Savings = null);
+}
+
+/// <summary>Builds the dashboard savings summary from lifetime usage and endpoint estimates.</summary>
+public static class SavingsSummaryCalculator
+{
+    public static DashboardMetrics.SavingsSummary Compute(
+        IReadOnlyList<DashboardMetrics.ModelUsage> usage,
+        IReadOnlyList<DashboardMetrics.ModelEndpoint> endpoints)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        ArgumentNullException.ThrowIfNull(endpoints);
+        var successful = usage.Sum(static item => item.SuccessfulRequests);
+        var slm = usage
+            .Where(static item => item.Route == nameof(Kare.Abstractions.KareRoute.LocalSlm))
+            .Sum(static item => item.SuccessfulRequests);
+        var cache = usage
+            .Where(static item => item.Route == nameof(Kare.Abstractions.KareRoute.Cache))
+            .Sum(static item => item.SuccessfulRequests);
+        var cloud = Math.Max(0, successful - slm - cache);
+        double? slmShare = successful == 0 ? null : 100.0 * slm / successful;
+        double? onDeviceShare = successful == 0 ? null : 100.0 * (slm + cache) / successful;
+        var cloudEndpoints = endpoints
+            .Where(static item => item.Id != "local")
+            .ToArray();
+        decimal? cloudCost = cloudEndpoints.All(static item => item.EstimatedCostUsd is null)
+            ? null
+            : cloudEndpoints.Sum(static item => item.EstimatedCostUsd ?? 0m);
+        var pricedCloudRequests = cloudEndpoints.Sum(static item => item.EstimatedCostRequests);
+        var avoided = endpoints
+            .FirstOrDefault(static item => item.Id == "local")?
+            .EstimatedAvoidedCostUsd;
+        return new DashboardMetrics.SavingsSummary(
+            successful,
+            slm,
+            cache,
+            cloud,
+            slmShare,
+            onDeviceShare,
+            cloudCost,
+            pricedCloudRequests,
+            avoided);
+    }
 }

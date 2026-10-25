@@ -98,9 +98,12 @@ public sealed class CloudModelRouteOptions
     public bool SupportsImages { get; set; }
 
     /// <summary>
-    /// Provider boundaries allowed to receive this route. An empty list is invalid.
+    /// Provider boundaries allowed to receive this route. An empty list allows both
+    /// modes. The list starts empty on purpose: the configuration binder appends
+    /// bound values to a pre-filled list, so a non-empty initializer would silently
+    /// merge with (and defeat) any configured restriction.
     /// </summary>
-    public List<RouteMode> AllowedModes { get; set; } = [RouteMode.Personal, RouteMode.Work];
+    public List<RouteMode> AllowedModes { get; set; } = [];
 
     /// <summary>OpenAI-compatible HTTPS base URL. Required only for Foundry.</summary>
     public string? BaseUrl { get; set; }
@@ -110,6 +113,13 @@ public sealed class CloudModelRouteOptions
 
     /// <summary>Environment variable containing the provider credential.</summary>
     public string? ApiKeyEnvironmentVariable { get; set; }
+
+    /// <summary>
+    /// Absolute path to a Claude Code OAuth credentials file, read and refreshed in
+    /// place when <see cref="Authentication"/> is <see cref="CloudAuthentication.ClaudeOAuth"/>.
+    /// Keep the file in protected configuration storage, never in the repository.
+    /// </summary>
+    public string? OAuthCredentialsPath { get; set; }
 
     /// <summary>OAuth scope used by Azure CLI token acquisition.</summary>
     public string TokenScope { get; set; } = "https://cognitiveservices.azure.com/.default";
@@ -149,6 +159,9 @@ public enum CloudAuthentication
 
     /// <summary>Acquire a scoped Entra bearer token through Azure CLI.</summary>
     AzureCli = 2,
+
+    /// <summary>Read and refresh the OAuth token in a Claude Code credentials file.</summary>
+    ClaudeOAuth = 3,
 }
 
 /// <summary>Cloud provider used by the Copilot SDK backend.</summary>

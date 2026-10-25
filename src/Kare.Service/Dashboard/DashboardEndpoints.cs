@@ -25,9 +25,10 @@ public static class DashboardEndpoints
             static (IDashboardMetricsCollector collector, IModelEndpointProvider endpointProvider) =>
         {
             var modelUsage = collector.GetModelUsage();
+            var modelEndpoints = endpointProvider.GetEndpoints(modelUsage);
             var snapshot = new DashboardMetrics.Snapshot(
                 DateTime.UtcNow,
-                endpointProvider.GetEndpoints(modelUsage),
+                modelEndpoints,
                 modelUsage,
                 collector.GetRequests(),
                 collector.GetActivities(),
@@ -35,7 +36,8 @@ public static class DashboardEndpoints
                 collector.GetWorkload(),
                 collector.GetRoutingDecisionUrls(),
                 collector.GetSkills(),
-                collector.GetMcpServers());
+                collector.GetMcpServers(),
+                SavingsSummaryCalculator.Compute(modelUsage, modelEndpoints));
 
             return Results.Json(snapshot, DashboardJsonContext.Default.Snapshot);
         });
@@ -400,6 +402,9 @@ public static class DashboardEndpoints
               <article class="card"><div class="muted">Active requests</div><div id="active-requests" class="metric">0</div></article>
               <article class="card"><div class="muted">Local routes</div><div id="local-routes" class="metric">0</div></article>
               <article class="card"><div class="muted">Billable routes</div><div id="billable-routes" class="metric">0</div></article>
+              <article class="card"><div class="muted">Answered by SLM</div><div id="slm-share" class="metric">n/a</div></article>
+              <article class="card"><div class="muted">Est. cloud cost</div><div id="cloud-cost" class="metric">n/a</div></article>
+              <article class="card"><div class="muted">Est. avoided by local</div><div id="avoided-cost" class="metric">n/a</div></article>
             </section>
 
             <section class="grid section">
@@ -615,6 +620,13 @@ public static class DashboardEndpoints
               document.querySelector('#active-requests').textContent = snapshot.workload?.activeRequests ?? 0;
               document.querySelector('#local-routes').textContent = local;
               document.querySelector('#billable-routes').textContent = billable;
+              const savings = snapshot.savings;
+              document.querySelector('#slm-share').textContent =
+                savings?.slmSharePercent == null ? 'n/a' : `${savings.slmSharePercent.toFixed(1)}%`;
+              document.querySelector('#cloud-cost').textContent =
+                savings?.estimatedCloudCostUsd == null ? 'unknown' : usd(savings.estimatedCloudCostUsd);
+              document.querySelector('#avoided-cost').textContent =
+                savings?.estimatedAvoidedCostUsd == null ? 'unknown' : usd(savings.estimatedAvoidedCostUsd);
 
               const endpoints = snapshot.modelEndpoints || [];
               document.querySelector('#model-endpoints').innerHTML = endpoints.length ? endpoints.map(item => `

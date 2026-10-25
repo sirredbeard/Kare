@@ -38,7 +38,10 @@
             "AverageInputCostUsdPerMillionTokens": null,
             "AverageOutputCostUsdPerMillionTokens": null,
             "PricingSource": null,
-            "PricingAsOf": null
+            "PricingAsOf": null,
+            "AllowedModes": [
+              "Personal"
+            ]
           },
           {
             "Id": "copilot-heavy",
@@ -52,7 +55,10 @@
             "AverageInputCostUsdPerMillionTokens": null,
             "AverageOutputCostUsdPerMillionTokens": null,
             "PricingSource": null,
-            "PricingAsOf": null
+            "PricingAsOf": null,
+            "AllowedModes": [
+              "Personal"
+            ]
           },
           {
             "Id": "foundry-responses-example",
@@ -69,7 +75,10 @@
             "AverageInputCostUsdPerMillionTokens": null,
             "AverageOutputCostUsdPerMillionTokens": null,
             "PricingSource": null,
-            "PricingAsOf": null
+            "PricingAsOf": null,
+            "AllowedModes": [
+              "Personal"
+            ]
           },
           {
             "Id": "foundry-anthropic-example",
@@ -86,7 +95,31 @@
             "AverageInputCostUsdPerMillionTokens": null,
             "AverageOutputCostUsdPerMillionTokens": null,
             "PricingSource": null,
-            "PricingAsOf": null
+            "PricingAsOf": null,
+            "AllowedModes": [
+              "Personal"
+            ]
+          },
+          {
+            "Id": "anthropic-work",
+            "Provider": "Anthropic",
+            "ModelId": "claude-sonnet-5-5",
+            "WireModel": "claude-sonnet-5-5",
+            "Tier": "Heavy",
+            "Priority": 500,
+            "SupportsTools": true,
+            "SupportsImages": true,
+            "AllowedModes": [
+              "Work"
+            ],
+            "BaseUrl": "https://api.anthropic.com",
+            "Authentication": "ClaudeOAuth",
+            "OAuthCredentialsPath": "/home/user/.claude/.credentials.json",
+            "WireApi": "anthropic",
+            "AverageInputCostUsdPerMillionTokens": 2.0,
+            "AverageOutputCostUsdPerMillionTokens": 10.0,
+            "PricingSource": "https://www.anthropic.com/pricing",
+            "PricingAsOf": "2026-10-25"
           }
         ]
       }
