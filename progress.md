@@ -42,4 +42,4 @@ Updated 2026-10-25 on the VENTUNO Q.
 - Issue #8: freeze the 24-task set, then run the scored comparison against Copilot CLI `auto` from the client machine.
 - Issue #3: re-check the BYOK documentation when the Copilot CLI version changes.
 - The three kept branches above wait on a delete call.
-- Frontier refresh: the protected catalog still targets the GPT-5.6 and Claude 5 generation. HydraFusion moved to Opus 5.5, GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna on 2026-10-14, and the Copilot Terra route dies on 2026-11-16. The swap list is in `findings/frontier-model-refresh.md`. It starts with new Foundry deployments, which is portal work, not code.
+- Frontier refresh: the protected catalog still targets the GPT-5.6 and Claude 5 generation. HydraFusion moved to Opus 5.5, GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna on 2026-10-14, and the Copilot Terra route dies on 2026-11-16. The swap list is in `findings/frontier-model-refresh.md`. The signed-in Kare Azure profile shows exactly five active deployments, all from the older generation. It starts with new Foundry deployments, which is account work, not code.
