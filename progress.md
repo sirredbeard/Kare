@@ -4,7 +4,7 @@ Updated 2026-10-25 on the VENTUNO Q.
 
 ## Current state
 
-- Branch: `main` at `ccc066b`. The changes below sit in the working tree. Nothing was committed in this pass, by instruction. The tree waits on review.
+- Branch: `main`. The gap pass below was committed as `11d88f2` ("Address the Kare gap list") and the Foundry sign-in correction as `7e69ef0`. Both are on `origin/main`.
 - Pull requests #14 and #16 are merged. The old note that called `pr-14-rewrite` the current branch was stale and is gone.
 - The deployed release is `ccc066b-dirty-jit` under `~/kare/service/current`. The `-dirty` suffix is new: `build/device-publish.sh` now names a release after the dirty tree that built it, not after the commit alone.
 - `kare.service` is enabled, and linger is on for the `arduino` user. The user manager was not running at all after the last reboot, which is why Kare was down. That hole is closed.
@@ -22,6 +22,13 @@ Updated 2026-10-25 on the VENTUNO Q.
 - Issue #8 has a harness: `bench/benchmark/benchmark.py`, a starter task set, and a README. Quality, latency, and cost stay as three separate numbers. Dry run passes. A scored run still needs the frozen 24-task set.
 - Issue #6 has it's local half: `build/kare-backup.sh` writes a restore point with a schema 1 manifest (sequence, commit with `-dirty` suffix when the tree is dirty, SHA-256 and byte count per object), verifies it, and prunes at 14 days. The first real point is on the device at `/var/lib/kare/backups/restore-points/20261025T074331Z-000001-ccc066b-dirty`, 5 objects, verified. Field inventory and the Azure steps left are in `findings/backup-restore-points.md`.
 - The PCIe note in `findings/nvme-storage.md` was stale. The NVMe link now trains at Gen4 x4 (16.0 GT/s, width 4, in both sysfs and `lspci`). A dated recheck is appended to that file.
+
+## Frontier model refresh (2026-10-25)
+
+- Five deployments were created with the signed-in Kare Azure profile: `gpt-6.1-sol` (2026-09-29, capacity 250), `gpt-6-luna` (2026-09-22, capacity 250), `gpt-6-astra` (2026-09-03, capacity 250), `claude-opus-5-5` (version 2, capacity 40), and `claude-sonnet-5-5` (version 2, capacity 80). All report Succeeded. The GPT-6 quota in this region is 250 per model.
+- The protected catalog was swapped in place with the tier shape and priority numbers kept. `gpt-6-astra` took a new Heavy slot at priority 1100. The Foundry `gpt-5.6-terra` entry stays, because its retirement is Copilot-side only. A backup of the old catalog sits in the protected config directory.
+- `kare.service` restarted on the new catalog. `/health` returns ok, and one bounded request per new deployment passed at the Foundry endpoint on the correct wire.
+- The example config in `examples/` named `gpt-5.6-terra` as a Copilot model. It now names `gpt-6-luna`.
 
 ## Branch cleanup
 
@@ -42,4 +49,4 @@ Updated 2026-10-25 on the VENTUNO Q.
 - Issue #8: freeze the 24-task set, then run the scored comparison against Copilot CLI `auto` from the client machine.
 - Issue #3: re-check the BYOK documentation when the Copilot CLI version changes.
 - The three kept branches above wait on a delete call.
-- Frontier refresh: the protected catalog still targets the GPT-5.6 and Claude 5 generation. HydraFusion moved to Opus 5.5, GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna on 2026-10-14, and the Copilot Terra route dies on 2026-11-16. The swap list is in `findings/frontier-model-refresh.md`. The signed-in Kare Azure profile shows exactly five active deployments, all from the older generation. It starts with new Foundry deployments, which is account work, not code.
+- Frontier refresh: done on 2026-10-25. Five new Foundry deployments were created and the protected catalog now routes to the GPT-6 and Claude 5.5 generation. The Copilot Terra route is gone from the catalog ahead of its 2026-11-16 retirement. Detail is in `findings/frontier-model-refresh.md`.

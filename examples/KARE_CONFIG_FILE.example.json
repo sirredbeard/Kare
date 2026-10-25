@@ -43,7 +43,7 @@
           {
             "Id": "copilot-heavy",
             "Provider": "GitHubCopilot",
-            "ModelId": "gpt-5.6-terra",
+            "ModelId": "gpt-6-luna",
             "Tier": "Heavy",
             "Priority": 100,
             "SupportsTools": true,
