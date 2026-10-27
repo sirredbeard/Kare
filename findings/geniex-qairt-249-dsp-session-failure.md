@@ -92,3 +92,8 @@ The board was rebooted to test recurrence. New boot (boot_id 97d72894-4b8d-4b17-
 ## Third boot and package inventory (2026-10-27, 01:26 EDT)
 
 Second deliberate reboot (boot_id b0c08f93-bd74-434c-9edd-7b5bfa2dbf1f): clean again. No error -22 in the kernel log; remoteproc1 running; cdsprpcd active; kare.service active with NRestarts 0 and /health "ok"; device-geniex-guard passed; a live probe returned the expected answer. Post-upgrade tally: the PAS boot failure has occurred on 1 of 3 boots, and the failure was the first boot after the upgrade. A full installed-package inventory (1,853 packages) was captured alongside this note as findings/installed-packages-2026-10-27.txt. The boot guard idea was dropped: one failure in three boots with a two-command remedy does not justify another moving part.
+
+## Filing outcome (2026-10-27)
+
+- GenieX issue FILED: qualcomm/GenieX #1607, https://github.com/qualcomm/GenieX/issues/1607 — the opaque-0x72 error-message report, opened Oct 27, 2026.
+- The Launchpad report (ubuntu-qcom-iot / linux-firmware-dragonwing + linux-qcom) was NOT filed: Thomas directed that it be disregarded on Oct 27 after the one-in-three reboot data came in. The draft is kept in the Muse workspace (bug-reports/launchpad-cdsp-pas-init-bug.md) if the failure ever recurs and a second data point makes it worth filing.
