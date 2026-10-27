@@ -1,7 +1,7 @@
 # GenieX inference fails after the QAIRT 2.49 upgrade — DSP session open error 0x72
 
 Date: 2026-10-27
-Status: OPEN — local inference down; kare.service left stopped.
+Status: RESOLVED by runtime workaround 2026-10-27 (~00:49 EDT) — Kare restored (see Resolution). The boot-time CDSP firmware-init failure remains an open platform bug and may recur on reboot.
 Purpose: working notes for a bug report (QCOM PPA / Arduino firmware / QAI Hub GenieX).
 
 ## Environment
@@ -58,5 +58,20 @@ Layer 2 — after restoring the symlink in Finding 1:
 
 - libcdsprpc.so symlink restored by hand (fixes layer 1). In the current package state the symlink is not package-owned; a future package operation may remove it again.
 - No downgrade path: the QCOM PPA pool (pool/main/q/qairt-sdk) now carries only 2.49 builds (2.49.0-0ubuntu1~bpo24.04.2 and 2.49.0-0ubuntu2); the 2.46 .debs have been purged from the pool, and linux-firmware-dragonwing 20260613 is likewise absent from the current index.
-- kare.service left stopped (deployed build: main @ ddfcd14). kare.env GenieXProcess paths still reference the removed v0.7.1 directory and must be repointed to the flat v0.9.3 layout when service resumes.
+- (Superseded by the Resolution below: paths repointed, Kare running.)
 - Candidate owners for the report: ubuntu-qcom-iot/qcom-ppa (QAIRT packaging), Arduino (linux-firmware-dragonwing), QAI Hub GenieX (skeleton/QAIRT compatibility).
+## Resolution (2026-10-27, ~00:49 EDT) — root cause refined; Kare restored
+
+The session-open failure was NOT a DSP/skel incompatibility. On the first boot after the upgrade (boot at 00:17), the CDSP remoteproc failed its boot-time firmware initialization and never came up:
+
+    [    9.977696] remoteproc remoteproc1: Booting fw image qcom/qcs8300/cdsp0.mbn, size 3174400
+    [    9.993803] qcom_q6v5_pas 26300000.remoteproc: error -22 initializing firmware qcom/qcs8300/cdsp0.mbn
+    [   10.077500] remoteproc remoteproc1: can't start rproc 26300000.remoteproc: -22
+
+Chain: remoteproc1 (26300000, cdsp0) left offline -> /dev/fastrpc-cdsp and /dev/fastrpc-cdsp-secure never created -> cdsprpcd.service skipped by its ConditionPathExists (it had been running under the previous boot) -> no CDSP fastrpc channel -> ggml-hex session open fails with error 0x72 for every userspace version. HTP0 still enumerated because device discovery does not need the fastrpc node.
+
+Proof it is a boot-time failure, not bad firmware: at runtime, starting remoteproc1 booted the SAME cdsp0.mbn (identical path/size, /usr/lib/firmware/updates/qcom/qcs8300/cdsp0.mbn) successfully ("remote processor 26300000.remoteproc is now up"); the fastrpc nodes appeared, cdsprpcd started, and the standalone serve probe returned a real chat completion. Kare was then started against GenieX v0.9.3 with kare.env GenieXProcess paths repointed to the flat layout: /health ok, build/device-geniex-guard.sh passed, restart count stable.
+
+Board identity for the report: SoC QCS8275 (soc_id 675), firmware resolved under qcom/qcs8300/, DSP skel dir populated from /usr/share/qcom/qcs8300/Qualcomm/QCS8300-RIDE/dsp/cdsp/.
+
+What remains open: why PAS init fails at boot-time auto-start but succeeds on runtime start, first observed on the first boot after the QAIRT 2.46 -> 2.49 and linux-firmware-dragonwing 20260613 -> 20260825 upgrade. Recurrence on reboot is untested; a boot that repeats the -22 needs the same runtime remedy (start remoteproc1, then cdsprpcd) before Kare can probe.
