@@ -75,3 +75,12 @@ Proof it is a boot-time failure, not bad firmware: at runtime, starting remotepr
 Board identity for the report: SoC QCS8275 (soc_id 675), firmware resolved under qcom/qcs8300/, DSP skel dir populated from /usr/share/qcom/qcs8300/Qualcomm/QCS8300-RIDE/dsp/cdsp/.
 
 What remains open: why PAS init fails at boot-time auto-start but succeeds on runtime start, first observed on the first boot after the QAIRT 2.46 -> 2.49 and linux-firmware-dragonwing 20260613 -> 20260825 upgrade. Recurrence on reboot is untested; a boot that repeats the -22 needs the same runtime remedy (start remoteproc1, then cdsprpcd) before Kare can probe.
+
+## Verification and evidence pack (2026-10-27, ~01:10 EDT)
+
+- Kare restarted cleanly against the fixed stack: active, NRestarts 0 after the restart, /health "ok".
+- build/device-geniex-guard.sh passed: compute=npu, endpoint http://127.0.0.1:18181/v1. A direct completion probe returned the expected token ("ready", finish_reason stop). The fix holds across a Kare restart; a board reboot has NOT been tested yet.
+- Kernel: 6.8.0-1089-qcom, version_signature "Ubuntu 6.8.0-1089.94-qcom 6.8.12"; binary packages linux-image-6.8.0-1089-qcom 6.8.0-1089.94 and linux-image-6.8.0-1084-qcom 6.8.0-1084.89 both installed (linux-image-qcom meta still 6.8.0-1084.89).
+- Packages: linux-firmware-dragonwing 20260825, qcom-fastrpc1 1.0.15+repack2.
+- sha256 /usr/lib/firmware/updates/qcom/qcs8300/cdsp0.mbn = 13e9a9f82850c4d6a6b70f6a3e65b971df3ece819c741ea674c2ff3b42214d09 (3174400 bytes). No base copy exists under /usr/lib/firmware/qcom/qcs8300/ (topology .bin files only), and no dragonwing/qairt .deb is cached in /var/cache/apt/archives — a 20260613 bisect needs the old file from elsewhere.
+- Kernel-source check (from the follow-up research): the "error -22 initializing firmware" line is printed after qcom_mdt_pas_init() calls qcom_scm_pas_init_image(); the -22 is the secure world's returned result to the PAS_INIT_IMAGE SMC, not a file, metadata-parse, or DMA failure (those log differently or return -ENOMEM).
