@@ -31,7 +31,7 @@ if [[ "$(uname -m)" != "aarch64" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOTNET="${KARE_DOTNET:-$REPO_ROOT/.dotnet/dotnet}"
+DOTNET="${KARE_DOTNET:-$(command -v dotnet)}"
 DEPLOY_ROOT="${KARE_DEPLOY_ROOT:-$HOME/kare/service}"
 PROJECT="$REPO_ROOT/src/Kare.Service/Kare.Service.csproj"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
@@ -44,8 +44,8 @@ OUTPUT="$REPO_ROOT/artifacts/kare-service-arm64-$MODE"
 RELEASE="$DEPLOY_ROOT/releases/$COMMIT-$MODE"
 CURRENT="$DEPLOY_ROOT/current"
 
-if [[ ! -x "$DOTNET" ]]; then
-    echo "Missing project-local .NET SDK: $DOTNET" >&2
+if [[ -z "$DOTNET" || ! -x "$DOTNET" ]]; then
+    echo "No .NET SDK found on PATH. Set KARE_DOTNET to the dotnet binary to use." >&2
     exit 1
 fi
 

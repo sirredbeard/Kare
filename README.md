@@ -97,7 +97,7 @@ On the VENTUNO Q:
 
 1. Install Git.
 2. Clone Kare.
-3. Install the .NET 11 SDK into `.dotnet` inside the checkout.
+3. Install the latest .NET SDK on the host (the repo pins no SDK version).
 4. Put service settings outside the repository and create the `kare.service` user unit described in [Copilot instructions](.github/copilot-instructions.md#device-iteration).
 5. Publish, test, deploy, restart, and health-check the service:
 

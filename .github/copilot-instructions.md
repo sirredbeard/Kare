@@ -100,7 +100,7 @@ The repo does not depend on a shell script as the primary interface. The .NET la
 
 ## Device iteration
 
-Development happens on x86_64 Linux and the service runs on Ubuntu 24.04 ARM64. Keep a project-local .NET 11 SDK at `.dotnet` in the device checkout because the board's global runtime may be an older major version.
+Development happens on x86_64 Linux and the service runs on Ubuntu 24.04 ARM64. Build and run with the latest .NET SDK installed on the host; the repo pins no SDK version and carries no project-local SDK.
 
 The repo does not install the device service unit yet. Create `~/.config/systemd/user/kare.service` outside the checkout:
 
@@ -114,7 +114,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/Kare
 ExecStart=%h/kare/service/current/kare --urls http://127.0.0.1:5285
-Environment=DOTNET_ROOT=%h/Kare/.dotnet
+Environment=DOTNET_ROOT=/usr/share/dotnet
 EnvironmentFile=-%h/.config/kare/service.env
 Restart=on-failure
 RestartSec=5
